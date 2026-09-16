@@ -1,0 +1,39 @@
+{
+  "name": "moon-patrol-void-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "test:performance": "node tests/performance.mjs",
+    "test:streaming": "node tests/streaming.mjs",
+    "format": "prettier --write src tests vite.config.ts tsconfig.json package.json index.html README.md docs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.0",
+    "@fontsource/barlow": "^5.3.0",
+    "@fontsource/barlow-condensed": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "framer-motion": "^12.23.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.180.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@webgpu/types": "^0.1.64",
+    "prettier": "^3.9.7",
+    "typescript": "~5.9.2",
+    "vite": "^6.3.5",
+    "vitest": "^4.1.11"
+  }
+}
