@@ -73,7 +73,16 @@ try {
     });
     const url = new URL(base);
     if (mode === 'webgl') url.searchParams.set('renderer', 'webgl');
-    await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+        break;
+      } catch (error) {
+        if (attempt === 2 || !/net::ERR_(CONNECTION_RESET|TIMED_OUT)/.test(String(error)))
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
     const launch = page.getByRole('button', { name: 'BEGIN EXPEDITION', exact: true });
     await expect(launch).toBeEnabled({ timeout: 90000 });
     assert.equal(
@@ -107,9 +116,19 @@ try {
       {},
       { timeout: 40000 },
     );
+    await page.bringToFront();
+    await page.locator('.scene canvas').click({ position: { x: 600, y: 300 } });
     await page.keyboard.down('Space');
     await page.keyboard.down('KeyJ');
-    await page.waitForTimeout(350);
+    await page.waitForFunction(
+      () => {
+        const value =
+          document.querySelectorAll('.meter')[1]?.querySelector('div > span')?.textContent ?? '0';
+        return Number.parseInt(value) > 0;
+      },
+      {},
+      { timeout: 5000 },
+    );
     await page.keyboard.up('Space');
     await page.keyboard.up('KeyJ');
     const heat = Number.parseInt(
