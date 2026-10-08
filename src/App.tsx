@@ -312,7 +312,15 @@ export default function App() {
                     .padStart(3, '0')}
                   <span>KM/H</span>
                 </div>
-                <b>{s.speed > 26 ? 'OVERDRIVE' : s.speed < 12 ? 'BRAKING' : 'CRUISE'}</b>
+                <b>
+                  {s.lowGravity
+                    ? 'LOW GRAVITY'
+                    : s.speed > 26
+                      ? 'OVERDRIVE'
+                      : s.speed < 12
+                        ? 'BRAKING'
+                        : 'CRUISE'}
+                </b>
               </div>
               <div className="gauges">
                 <Meter
@@ -347,6 +355,25 @@ export default function App() {
                 </div>
               </div>
             </div>
+            {playing && (
+              <div className="threat-radar" aria-label="Terrain scanner">
+                {s.radar.map((t) => (
+                  <div
+                    key={t.id}
+                    className={'threat-marker ' + (t.urgent ? 'urgent' : '')}
+                    style={{ left: t.x + '%', top: t.y + '%' }}
+                  >
+                    <span className="threat-glyph">{t.offscreen ? '›' : '⌖'}</span>
+                    <span>
+                      <b>{t.label}</b>
+                      <small>
+                        {t.distance} M {t.urgent ? '· CAUTION' : ''}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="scoreboard">
               <small>EXPEDITION SCORE</small>
               <b>{fmt(s.score).padStart(6, '0')}</b>

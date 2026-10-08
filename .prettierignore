@@ -3,3 +3,7 @@ dist/
 test-results/
 package-lock.json
 *.log
+# Preserve the user-supplied source requirements.
+docs/PRD.md
+*.tsbuildinfo
+playwright-report/

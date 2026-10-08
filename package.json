@@ -11,7 +11,12 @@
     "test:browser": "node tests/browser-smoke.mjs",
     "test:performance": "node tests/performance.mjs",
     "test:streaming": "node tests/streaming.mjs",
-    "format": "prettier --write src tests vite.config.ts tsconfig.json package.json index.html README.md docs"
+    "format": "prettier --write .",
+    "test:hazards": "node tests/hazards.mjs",
+    "build:pages": "tsc -b && vite build --mode pages",
+    "preview:pages": "vite preview --mode pages --host 127.0.0.1",
+    "test:pages": "node tests/pages.mjs",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.0",
@@ -35,5 +40,8 @@
     "typescript": "~5.9.2",
     "vite": "^6.3.5",
     "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

@@ -1,5 +1,6 @@
 import * as T from 'three/webgpu';
 import { randomAt } from './rules';
+import { batchStaticMeshes } from './render-batches';
 export const mat = (
   color: T.ColorRepresentation,
   metalness = 0.15,
@@ -76,7 +77,10 @@ export function makeRover() {
         );
         lug.rotation.z = (-a * Math.PI) / 6;
       }
+      batchStaticMeshes(wheel);
     }
+  batchStaticMeshes(turret);
+  batchStaticMeshes(group);
   const flame = box(group, [1.5, 0.22, 1.2], [-2.9, -0.05, 0], glow);
   flame.visible = false;
   return { group, wheels, turret, flame };
@@ -136,6 +140,7 @@ export function makeEnemy(kind: string) {
     beam.position.y = -5;
     g.add(beam);
   }
+  batchStaticMeshes(g);
   g.scale.setScalar(big);
   return g;
 }
@@ -197,7 +202,8 @@ export function disposeGroup(group: T.Object3D, retainedMaterials?: Set<T.Materi
   const geometries = new Set<T.BufferGeometry>(),
     materials = new Set<T.Material>();
   group.traverse((o) => {
-    if (o instanceof T.Mesh || o instanceof T.Points) {
+    if (o instanceof T.InstancedMesh) o.dispose();
+    if (o instanceof T.Mesh || o instanceof T.Points || o instanceof T.Line) {
       geometries.add(o.geometry);
       for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
     }

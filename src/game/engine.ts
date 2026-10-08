@@ -1,6 +1,10 @@
 import * as T from 'three/webgpu';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Sound } from './audio';
+import { Hazards, type HazardEffects } from './hazards';
+import { EncounterDirector, nextGap } from './route';
+import { JumpAssist, landingQuality, terrainPitch } from './movement';
+import { updateInstanceBatch } from './render-batches';
 import { initializePhysics } from './physics';
 import { TerrainCompute } from './terrain-compute';
 import { Terrain } from './terrain';
@@ -17,8 +21,6 @@ import {
   SECTOR_LENGTH,
   biomeIndex,
   sectorIndex,
-  baseHeight,
-  randomAt,
   clamp,
   updateEnergy,
   addHeat,
@@ -36,9 +38,10 @@ interface Enemy {
   timer: number;
   seed: number;
   diving: boolean;
+  collided: boolean;
 }
 interface Shot {
-  mesh: T.Mesh;
+  mesh: T.Object3D;
   active: boolean;
   x: number;
   y: number;
@@ -85,10 +88,32 @@ export class Game {
   private vehicle!: RAPIER.DynamicRayCastVehicleController;
   private terrain!: Terrain;
   private compute = new TerrainCompute();
+  private hazards!: Hazards;
+  private director = new EncounterDirector();
+  private jumpAssist = new JumpAssist();
+  private launched = false;
+  private landingBoost = 0;
+  private tutorialStage = 0;
+  private hazardEffects: HazardEffects = {
+    hurt: (amount) => this.hurt(amount),
+    launch: (velocity) => {
+      const v = this.body.linvel();
+      this.body.setLinvel({ x: v.x, y: velocity, z: 0 }, true);
+      this.launched = true;
+      this.audio.jump();
+    },
+    notice: (text) => this.announce(text),
+    burst: (x, y, count) => this.burst(x, y, count),
+    rumble: () => {
+      this.trauma = 0.35;
+      this.audio.tone(80, 0.25, 'sawtooth', 0.25, 0, 25);
+    },
+  };
   private rover = makeRover();
   private backdrop!: ReturnType<typeof makeBackdrop>;
   private enemies: Enemy[] = [];
   private shots: Shot[] = [];
+  private shotBatches!: [T.InstancedMesh, T.InstancedMesh];
   private strikes: Strike[] = [];
   private particleMesh!: T.InstancedMesh;
   private particles: Particle[] = [];
@@ -105,7 +130,6 @@ export class Game {
   private invulnerable = 0;
   private spawnAt = 3;
   private jumpHeld = 0;
-  private lastJump = false;
   private airborneTime = 0;
   private lastGrounded = true;
   private trauma = 0;
@@ -219,15 +243,26 @@ export class Game {
           this.vehicle.setWheelMaxSuspensionForce(i, 10000);
           this.vehicle.setWheelFrictionSlip(i, 1.7);
         }
+      this.hazards = new Hazards(this.scene, this.world);
       this.terrain = new Terrain(this.scene, this.world, this.compute);
       this.terrain.update(0);
       const shotGeo = new T.SphereGeometry(1, 7, 5),
         friendly = mat('#9bffff', 0.1, 0.2, '#44d5e6'),
         hostile = mat('#ff8c60', 0.1, 0.2, '#ff4c22');
+      this.shotBatches = [
+        new T.InstancedMesh(shotGeo, friendly, 120),
+        new T.InstancedMesh(shotGeo, hostile, 40),
+      ];
+      for (const batch of this.shotBatches) {
+        batch.instanceMatrix.setUsage(T.DynamicDrawUsage);
+        // Moving instances span the streamed play area; stale bounds must not cull them.
+        batch.frustumCulled = false;
+        batch.count = 0;
+        this.scene.add(batch);
+      }
       for (let i = 0; i < 160; i++) {
-        const mesh = new T.Mesh(shotGeo, i < 120 ? friendly : hostile);
+        const mesh = new T.Object3D();
         mesh.visible = false;
-        this.scene.add(mesh);
         this.shots.push({
           mesh,
           active: false,
@@ -325,7 +360,7 @@ export class Game {
     const down = (...codes: string[]) => codes.some((c) => this.keys.has(c) || this.touch.has(c));
     const pad = navigator.getGamepads?.()[0];
     const b = (i: number) => !!pad?.buttons[i]?.pressed;
-    if (b(9) && !this.padPause) this.pause();
+    if (b(9) && !this.padPause && !this.overlayOpen) this.pause();
     this.padPause = b(9);
     const axis = pad?.axes[0] ?? 0;
     return {
@@ -341,6 +376,12 @@ export class Game {
     if (!this.ready) return;
     if (loadout) this.loadout = loadout;
     this.clearEntities();
+    this.hazards.reset();
+    this.director.reset();
+    this.jumpAssist.reset();
+    this.launched = false;
+    this.landingBoost = 0;
+    this.tutorialStage = 0;
     this.terrain.dispose();
     this.terrain = new Terrain(this.scene, this.world, this.compute);
     this.terrain.update(0);
@@ -358,14 +399,13 @@ export class Game {
     this.current.copy(this.previous);
     this.camera.position.set(12, 10.2, 34);
     this.elapsed = 0;
-    this.spawnAt = 3;
+    this.spawnAt = 0;
     this.nextReport = 5;
     this.sectorBefore = 0;
     this.bossSpawned = false;
     this.invulnerable = 2;
     this.reportMark = { time: 0, kills: 0, clean: 0, damage: 0 };
     this.jumpHeld = 0;
-    this.lastJump = false;
     this.airborneTime = 0;
     this.lastGrounded = true;
     this.fireCooldown = 0;
@@ -374,7 +414,7 @@ export class Game {
     this.rearCooldown = 0;
     this.keys.clear();
     this.touch.clear();
-    this.announce('EXPEDITION STARTED');
+    this.announce('FIRST CONTACT · J TO FIRE / SPACE TO JUMP');
     void this.audio.start();
     this.emit();
   }
@@ -395,6 +435,7 @@ export class Game {
     this.state.phase = 'playing';
     this.accumulator = 0;
     this.state.hull = clamp(this.state.hull + 25, 0, 100);
+    this.invulnerable = Math.max(this.invulnerable, 1.2);
     this.state.capacitor = 100;
     this.state.heat = 0;
     this.state.lockout = 0;
@@ -472,45 +513,57 @@ export class Game {
     this.previous.copy(this.current);
     const p = this.body.translation(),
       v = this.body.linvel();
-    const grounded = Array.from({ length: 6 }, (_, i) => this.vehicle.wheelIsInContact(i)).some(
-      Boolean,
-    );
+    this.terrain.update(p.x);
+    this.hazards.stream(p.x);
+    const contacts = new Set<number>();
+    for (let i = 0; i < 6; i++)
+      if (this.vehicle.wheelIsInContact(i)) {
+        const collider = this.vehicle.wheelGroundObject(i);
+        if (collider) contacts.add(collider.handle);
+      }
+    const grounded = contacts.size > 0;
+    this.hazards.step(dt, { x: p.x, y: p.y, contacts }, this.hazardEffects);
+    if (s.phase !== 'playing') return;
+    const gravity = this.hazards.gravityAt(p.x) ?? BIOMES[biomeIndex(p.x)].gravity;
+    s.lowGravity = gravity === 3;
+    const height = (x: number) => this.hazards.surfaceHeight(x, this.terrain.heightAt(x));
+    const slope = terrainPitch(height(p.x - 1.55), height(p.x + 1.55));
+    this.landingBoost = Math.max(0, this.landingBoost - dt);
     if (!grounded) this.airborneTime += dt;
     if (grounded && !this.lastGrounded && this.airborneTime > 0.3) {
       const angle = 2 * Math.atan2(this.body.rotation().z, this.body.rotation().w);
-      if (Math.abs(angle) < 0.16 && v.y > -15) {
+      if (landingQuality(angle, slope, v.y, this.airborneTime, this.launched)) {
         s.clean++;
         s.score += 250;
-        this.announce('CLEAN LANDING +250');
+        this.landingBoost = 1.2;
+        this.announce('CLEAN LANDING +250 · MOMENTUM BOOST');
         this.audio.tone(660, 0.15, 'sine', 0.2);
       }
       this.trauma = Math.min(1, this.airborneTime * 0.15);
       this.burst(p.x, p.y - 0.6, 14);
       this.airborneTime = 0;
+      this.launched = false;
     }
     this.lastGrounded = grounded;
     const { boosting, hovering } = updateEnergy(s, input, !grounded && this.jumpHeld > 0.16, dt);
-    const target = input.brake ? 8 : boosting ? 36 : 20;
+    const target = input.brake ? 8 : boosting ? 36 : this.landingBoost > 0 ? 24 : 20;
     // Arcade speed servo acts through impulses; all vertical contact is raycast suspension.
     const acceleration = clamp((target - v.x) * (biomeIndex(p.x) === 1 ? 1.7 : 3.5), -20, 20);
     this.body.applyImpulse({ x: acceleration * this.body.mass() * dt, y: 0, z: 0 }, true);
-    if (input.jump && !this.lastJump && grounded) {
+    if (this.jumpAssist.update(input.jump, grounded, dt)) {
+      this.launched = true;
       this.body.applyImpulse({ x: 0, y: this.body.mass() * 11.5, z: 0 }, true);
       this.audio.jump();
       this.burst(p.x, p.y - 1, 24);
       this.lastGrounded = false;
     }
     this.jumpHeld = input.jump ? this.jumpHeld + dt : 0;
-    this.lastJump = input.jump;
     if (hovering && v.y < 2.5)
-      this.body.applyImpulse(
-        { x: 0, y: this.body.mass() * BIOMES[biomeIndex(p.x)].gravity * 0.86 * dt, z: 0 },
-        true,
-      );
+      this.body.applyImpulse({ x: 0, y: this.body.mass() * gravity * 0.86 * dt, z: 0 }, true);
     const angle = 2 * Math.atan2(this.body.rotation().z, this.body.rotation().w),
-      desired = grounded ? 0 : input.pitch * 0.349;
+      desired = grounded ? slope : input.pitch * 0.349;
     this.body.setAngvel({ x: 0, y: 0, z: clamp((desired - angle) * 6, -1.5, 1.5) }, true);
-    this.world.gravity.y = -BIOMES[biomeIndex(p.x)].gravity;
+    this.world.gravity.y = -gravity;
     this.vehicle.updateVehicle(dt);
     this.world.step();
     this.current.copy(this.body.translation());
@@ -518,8 +571,11 @@ export class Game {
       this.hurt(35);
       if (s.phase === 'playing') {
         let x = this.current.x + 14;
-        while (baseHeight(x) < -1) x += 2;
-        this.body.setTranslation({ x, y: baseHeight(x) + 3, z: 0 }, true);
+        while (this.terrain.heightAt(x) < -1 || this.terrain.heightAt(x + 4) < -2) x += 2;
+        this.launched = false;
+        this.airborneTime = 0;
+        this.jumpAssist.reset();
+        this.body.setTranslation({ x, y: this.terrain.heightAt(x) + 3, z: 0 }, true);
         this.body.setLinvel({ x: 18, y: 0, z: 0 }, true);
         this.current.copy(this.body.translation());
         this.previous.copy(this.current);
@@ -551,7 +607,15 @@ export class Game {
     if (s.phase !== 'playing') return;
     if (this.elapsed > this.spawnAt) {
       this.wave();
-      this.spawnAt = this.elapsed + Math.max(2.8, 5 - s.biome * 0.4);
+      this.spawnAt = this.elapsed + 0.1;
+    }
+    if (this.tutorialStage === 0 && s.distance > 60 && s.distance < 105) {
+      this.tutorialStage = 1;
+      this.announce('CHASM AHEAD · TAP SPACE / HOLD TO HOVER');
+    }
+    if (this.tutorialStage === 1 && s.distance > 185) {
+      this.tutorialStage = 2;
+      this.announce('SHIFT FOR OVERDRIVE · K TO VENT WEAPONS');
     }
     if (s.sector !== this.sectorBefore) {
       this.sectorBefore = s.sector;
@@ -658,6 +722,8 @@ export class Game {
       life: enemy ? 5 : type === 'flak' ? 0.62 : 2,
     });
     shot.mesh.visible = true;
+    shot.mesh.position.set(x, y, 0.2);
+    shot.mesh.rotation.z = Math.atan2(vy, vx);
     shot.hit.clear();
     shot.mesh.scale.set(
       type === 'beam' ? 2.8 : type === 'rail' ? 0.16 : 0.45,
@@ -689,7 +755,14 @@ export class Game {
         this.hurt(16);
         s.life = 0;
       }
-      if (!s.enemy)
+      if (!s.enemy) {
+        const hit = this.hazards.strikeCore(s.x, s.y, s.damage, this.hazardEffects);
+        if (hit) {
+          if (hit === 'destroyed') this.state.score += 150;
+          if (s.type !== 'rail') s.life = 0;
+        }
+      }
+      if (!s.enemy && s.life > 0)
         for (const e of this.enemies) {
           const radius = e.kind === 'boss' ? 5 : e.kind === 'bomber' ? 2.5 : 1.5;
           if (e.hp > 0 && !s.hit.has(e) && Math.hypot(s.x - e.x, s.y - e.y) < radius) {
@@ -701,14 +774,17 @@ export class Game {
             break;
           }
         }
-      if (s.y < this.terrain.heightAt(s.x) + 0.15) {
+      const surface = this.hazards.surfaceHeight(s.x, this.terrain.heightAt(s.x));
+      if (s.y < surface + 0.15) {
         if (s.enemy) {
-          this.terrain.carve(s.x, this.terrain.heightAt(s.x), 5, 4);
+          this.hazards.fractureNear(s.x, 5);
+          this.terrain.carve(s.x, surface, 5, 4);
           this.burst(s.x, s.y, 55);
           this.audio.blast(clamp((s.x - p.x) / 35, -1, 1));
           this.trauma = 0.4;
         }
         if (s.type === 'seismic') {
+          this.hazards.fractureNear(s.x, 12);
           for (const e of this.enemies) if (e.y < 3 && Math.abs(e.x - s.x) < 12) e.hp -= 5;
           this.burst(s.x, s.y, 25);
         }
@@ -746,22 +822,23 @@ export class Game {
       timer: 0,
       seed: x,
       diving: false,
+      collided: false,
     });
   }
   private wave() {
-    const x = this.current.x + 70,
-      b = this.state.biome,
-      n = Math.floor(this.elapsed / 4),
-      r = randomAt(n + 91);
-    if (r < 0.4) {
-      for (let i = 0; i < 3 + b; i++) this.spawn('drone', x + i * 4, 9 + Math.abs(i - 1) * 2);
-    } else if (r < 0.59) this.spawn('bomber', x, 15);
-    else if (r < 0.73 && b > 0) this.spawn('hunter', x, 11);
-    else if (r < 0.85 && b > 1) this.spawn('interceptor', x, 19);
-    else this.spawn('skimmer', x, this.terrain.heightAt(x) + 1);
-    const gx = x + 15;
-    this.spawn(b > 0 && r > 0.5 ? 'mine' : 'rock', gx, this.terrain.heightAt(gx) + 1);
-    if (b >= 2 && n % 3 === 0) this.spawn('leech', gx + 20, -2);
+    for (const event of this.director.take(this.current.x)) {
+      for (let i = 0; i < event.count; i++) {
+        const x = event.x + i * 4;
+        const ground = ['rock', 'mine', 'skimmer', 'leech'].includes(event.kind);
+        this.spawn(
+          event.kind,
+          x,
+          ground
+            ? this.terrain.heightAt(x) + 1
+            : event.altitude + Math.abs(i - (event.count - 1) / 2) * 1.6,
+        );
+      }
+    }
   }
   private updateEnemies(dt: number, boost: boolean) {
     const p = this.current;
@@ -814,13 +891,16 @@ export class Game {
       }
       e.group.position.set(e.x, e.y, 0);
       if (e.kind === 'drone') e.group.rotation.z = (e.x - prevX) * 0.4;
-      if (Math.hypot(e.x - p.x, e.y - p.y) < (e.kind === 'rock' ? 2.6 : 2.3)) {
+      if (e.hp > 0 && Math.hypot(e.x - p.x, e.y - p.y) < (e.kind === 'rock' ? 2.6 : 2.3)) {
+        e.collided = true;
         this.hurt(e.kind === 'rock' ? 18 : 22);
         e.hp = 0;
       }
       if (e.hp <= 0) {
-        this.state.kills += e.kind === 'rock' ? 0 : 1;
-        this.state.score += e.kind === 'boss' ? 4000 : e.kind === 'rock' ? 75 : 200;
+        if (!e.collided) {
+          this.state.kills += e.kind === 'rock' ? 0 : 1;
+          this.state.score += e.kind === 'boss' ? 4000 : e.kind === 'rock' ? 75 : 200;
+        }
         this.burst(e.x, e.y, e.kind === 'boss' ? 100 : 35);
         this.audio.blast(clamp((e.x - p.x) / 35, -1, 1));
         this.trauma = 0.25;
@@ -854,6 +934,7 @@ export class Game {
         s.mesh.scale.set(22, 1, 22);
         s.timer = 0.3;
         this.burst(s.x, 1, 65);
+        this.hazards.fractureNear(s.x, 5);
         this.terrain.carve(s.x, this.terrain.heightAt(s.x), 5, 6);
         if (Math.abs(this.current.x - s.x) < 5) this.hurt(35);
         this.audio.blast();
@@ -984,21 +1065,80 @@ export class Game {
     this.trauma = Math.max(0, this.trauma - dt * 2);
     this.camera.position.y += Math.sin(this.elapsed * 75) * this.trauma * 0.15;
     this.camera.lookAt(p.x + (narrow ? (menu ? 2 : 6) : menu ? 9 : 14), 3.6, 0);
+    this.camera.updateMatrixWorld();
+    const threats = this.hazards.threats(p.x);
+    const gap = nextGap(p.x);
+    if (gap - p.x < 75 && !threats.some((t) => Math.abs(t.x - gap) < 15))
+      threats.push({
+        id: 'gap-' + gap,
+        x: gap,
+        y: 2,
+        label: 'CHASM · JUMP',
+        urgent: gap - p.x < 28,
+      });
+    for (const strike of this.strikes)
+      if (!strike.fired && strike.x > p.x - 5 && strike.x < p.x + 75)
+        threats.push({
+          id: 'strike-' + strike.x,
+          x: strike.x,
+          y: 9,
+          label: 'ORBITAL STRIKE ' + strike.timer.toFixed(1) + 's',
+          urgent: true,
+        });
+    for (const e of this.enemies)
+      if (
+        e.hp > 0 &&
+        e.x > p.x + 8 &&
+        e.x < p.x + 75 &&
+        e.y > 5 &&
+        ['bomber', 'hunter', 'interceptor', 'boss'].includes(e.kind)
+      )
+        threats.push({
+          id: e.kind + e.seed,
+          x: e.x,
+          y: e.y + 2,
+          label: e.kind === 'boss' ? 'MOTHERSHIP' : e.kind.toUpperCase(),
+          urgent: e.x - p.x < 25,
+        });
+    this.state.radar = threats
+      .sort((a, b) => a.x - b.x)
+      .slice(0, narrow ? 2 : 3)
+      .map((t) => {
+        const point = new T.Vector3(t.x, t.y, 0).project(this.camera);
+        return {
+          id: t.id,
+          x: clamp((point.x + 1) * 50, narrow ? 20 : 12, narrow ? 76 : 88),
+          y: clamp((1 - point.y) * 50, narrow ? 34 : 24, 68),
+          label: t.label,
+          distance: Math.max(0, Math.round(t.x - p.x)),
+          urgent: t.urgent,
+          offscreen: Math.abs(point.x) > 0.85,
+        };
+      });
     this.backdrop.group.position.x = p.x * 0.98;
     this.light.position.x = p.x - 25;
     this.light.target.position.x = p.x + 10;
     const biome = BIOMES[this.state.biome];
     (this.scene.background as T.Color).lerp(new T.Color(biome.sky), dt * 2);
     (this.scene.fog as T.FogExp2).color.copy(this.scene.background as T.Color);
-    for (let i = 0; i < this.particles.length; i++) {
-      const q = this.particles[i];
+    for (let team = 0; team < 2; team++) {
+      updateInstanceBatch(
+        this.shotBatches[team],
+        this.shots.filter((s) => s.active && Number(s.enemy) === team).map((s) => s.mesh),
+      );
+    }
+    let particleCount = 0;
+    for (const q of this.particles) {
+      if (q.life <= 0) continue;
       this.dummy.position.set(q.x, q.y, q.z);
       this.dummy.scale.setScalar(q.life > 0 ? Math.min(1, q.life * 3) : 0);
       this.dummy.rotation.set(q.life * 4, q.life * 2, 0);
       this.dummy.updateMatrix();
-      this.particleMesh.setMatrixAt(i, this.dummy.matrix);
+      this.particleMesh.setMatrixAt(particleCount++, this.dummy.matrix);
     }
-    this.particleMesh.instanceMatrix.needsUpdate = true;
+    this.particleMesh.count = particleCount;
+    this.particleMesh.visible = particleCount > 0;
+    if (particleCount > 0) this.particleMesh.instanceMatrix.needsUpdate = true;
   }
   private clearEntities() {
     for (const e of this.enemies) disposeGroup(e.group);
@@ -1022,6 +1162,7 @@ export class Game {
     this.audio.dispose();
     if (this.ready) {
       this.clearEntities();
+      this.hazards.dispose();
       this.terrain.dispose();
       this.world.free();
       disposeGroup(this.scene);

@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { baseHeight, BIOMES, biomeIndex, randomAt } from './rules';
 import { mat, box, disposeGroup, lunarTexture } from './models';
 import { TerrainCompute } from './terrain-compute';
+import { batchStaticMeshes } from './render-batches';
 interface Chunk {
   id: number;
   group: T.Group;
@@ -89,12 +90,13 @@ export class Terrain {
     skirt.computeVertexNormals();
     group.add(new T.Mesh(skirt, mat('#26333e', 0.1, 1)));
     const biome = biomeIndex(id * 64),
-      accent = mat(BIOMES[biome].color, 0.2, 0.3, BIOMES[biome].color);
+      accent = mat(BIOMES[biome].color, 0.2, 0.3, BIOMES[biome].color),
+      markerMaterial = mat('#485d67');
     for (let i = 0; i < 3; i++) {
       const x = id * 64 + 8 + i * 23,
         z = -5.5;
       if (baseHeight(x) > -2) {
-        box(group, [0.12, 1.7, 0.12], [x, baseHeight(x) + 0.85, z], mat('#485d67'));
+        box(group, [0.12, 1.7, 0.12], [x, baseHeight(x) + 0.85, z], markerMaterial);
         box(group, [0.16, 0.28, 0.2], [x, baseHeight(x) + 1.8, z], accent);
       }
     }
@@ -110,19 +112,26 @@ export class Terrain {
       rock.castShadow = false;
       group.add(rock);
     }
-    if (biome === 1 || biome === 3)
+    if (biome === 1 || biome === 3) {
+      const crystalMaterial = mat(
+        BIOMES[biome].color,
+        0.55,
+        0.25,
+        biome === 3 ? '#174d35' : undefined,
+      );
       for (let i = 0; i < 6; i++) {
         const x = id * 64 + i * 11,
           z = -7 - randomAt(id + i) * 4,
           h = 2 + randomAt(id * 4 + i) * 7;
         const crystal = new T.Mesh(
           new T.ConeGeometry(biome === 1 ? 1.1 : 0.6, h, biome === 1 ? 5 : 7),
-          mat(BIOMES[biome].color, 0.55, 0.25, biome === 3 ? '#174d35' : undefined),
+          crystalMaterial,
         );
         crystal.position.set(x, baseHeight(x) + h / 2, z);
         crystal.rotation.z = 0.15;
         group.add(crystal);
       }
+    }
     if (biome === 2) {
       const lava = box(
         group,
@@ -132,9 +141,12 @@ export class Terrain {
       );
       lava.receiveShadow = false;
     }
-    if (biome === 4)
-      for (let i = 0; i < 4; i++)
-        box(group, [2, 12, 2], [id * 64 + i * 18, 3, -10], mat('#28303d', 0.7, 0.4));
+    if (biome === 4) {
+      const towerMaterial = mat('#28303d', 0.7, 0.4);
+      for (let i = 0; i < 4; i++) box(group, [2, 12, 2], [id * 64 + i * 18, 3, -10], towerMaterial);
+    }
+    // The deformable surface remains independent from decorative batches.
+    batchStaticMeshes(group, new Set([mesh]));
     this.scene.add(group);
     const collider = this.world.createCollider(RAPIER.ColliderDesc.trimesh(v, ix).setFriction(0.8));
     this.chunks.set(id, { id, group, mesh, collider, vertices: v, indices: ix, version: 0 });
@@ -142,23 +154,47 @@ export class Terrain {
   carve(x: number, y: number, radius = 5, depth = 5) {
     this.queue = this.queue
       .then(async () => {
-        for (const chunk of [...this.chunks.values()]) {
-          if (chunk.id * 64 > x + radius || (chunk.id + 1) * 64 < x - radius) continue;
-          const vertices = await this.compute.carve(chunk.vertices, x, y, radius, depth);
-          if (this.disposed || this.chunks.get(chunk.id) !== chunk) continue;
-          const collider = this.world.createCollider(
-            RAPIER.ColliderDesc.trimesh(vertices, chunk.indices).setFriction(0.8),
-          );
+        const chunks = [...this.chunks.values()].filter(
+          (chunk) => chunk.id * 64 <= x + radius && (chunk.id + 1) * 64 >= x - radius,
+        );
+        const edits = await Promise.all(
+          chunks.map(async (chunk) => ({
+            chunk,
+            vertices: await this.compute.carve(chunk.vertices, x, y, radius, depth),
+          })),
+        );
+        if (this.disposed) return;
+        const live = edits.filter(({ chunk }) => this.chunks.get(chunk.id) === chunk);
+        const replacements: { chunk: Chunk; vertices: Float32Array; collider: RAPIER.Collider }[] =
+          [];
+        try {
+          for (const { chunk, vertices } of live)
+            replacements.push({
+              chunk,
+              vertices,
+              collider: this.world.createCollider(
+                RAPIER.ColliderDesc.trimesh(vertices, chunk.indices).setFriction(0.8),
+              ),
+            });
+        } catch (error) {
+          for (const replacement of replacements)
+            this.world.removeCollider(replacement.collider, true);
+          throw error;
+        }
+        // All readbacks finish before any surface changes. Commit the mesh/collider
+        // pair for every surviving chunk in one task, retaining GPU vertex buffers.
+        for (const { chunk, vertices, collider } of replacements) {
           this.world.removeCollider(chunk.collider, true);
           chunk.collider = collider;
-          chunk.vertices = vertices;
-          chunk.mesh.geometry.setAttribute('position', new T.BufferAttribute(vertices, 3));
+          chunk.vertices.set(vertices);
+          chunk.mesh.geometry.getAttribute('position').needsUpdate = true;
           chunk.mesh.geometry.computeVertexNormals();
           chunk.mesh.geometry.computeBoundingSphere();
           chunk.version++;
         }
       })
-      .catch((err) => console.warn('Terrain brush failed', err));
+      .catch((error) => console.warn('Terrain brush failed', error));
+    return this.queue;
   }
   heightAt(x: number) {
     const chunk = this.chunks.get(Math.floor(x / 64));

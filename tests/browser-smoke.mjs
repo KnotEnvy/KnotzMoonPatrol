@@ -88,6 +88,37 @@ try {
   assert(!scenarios.error);
   assert(scenarios.after < scenarios.before - 3.9);
   assert(Math.abs(scenarios.colliderY - scenarios.after) < 0.05);
+  const seam = await page.evaluate(async () => {
+    const g = window.__voidRunner,
+      x = 64,
+      before = g.terrain.heightAt(x),
+      started = performance.now();
+    await g.terrain.carve(x, before, 5, 4);
+    g.world.step();
+    const probes = [63.8, 64.2].map((x) => {
+      const hit = g.world.castRay(
+        { origin: { x, y: 20, z: 0 }, dir: { x: 0, y: -1, z: 0 } },
+        40,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        g.body,
+      );
+      return { mesh: g.terrain.heightAt(x), collider: hit ? 20 - hit.timeOfImpact : null };
+    });
+    return {
+      before,
+      left: g.terrain.heightAt(63.999),
+      right: g.terrain.heightAt(64.001),
+      ms: performance.now() - started,
+      probes,
+    };
+  });
+  assert(Math.abs(seam.left - seam.right) < 0.02);
+  assert(seam.left < seam.before - 3.9);
+  assert(seam.probes.every((p) => p.collider !== null && Math.abs(p.mesh - p.collider) < 0.02));
+  console.log('CRATER SEAM', seam);
   const result = await page.evaluate(() => {
     const g = window.__voidRunner,
       none = { brake: false, boost: false, jump: false, fire: false, vent: false, pitch: 0 };
@@ -153,7 +184,7 @@ try {
   assert.deepEqual(errors, []);
   await fs.writeFile(
     'test-results/browser-results.json',
-    JSON.stringify({ driving, jump, result, scenarios, errors }, null, 2),
+    JSON.stringify({ driving, jump, result, scenarios, seam, errors }, null, 2),
   );
 } finally {
   await browser.close();

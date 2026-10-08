@@ -80,7 +80,18 @@ export interface Input {
   vent: boolean;
   pitch: number;
 }
+export interface RadarMarker {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  distance: number;
+  urgent: boolean;
+  offscreen: boolean;
+}
 export interface Telemetry {
+  radar: RadarMarker[];
+  lowGravity: boolean;
   phase: Phase;
   distance: number;
   speed: number;
@@ -108,6 +119,8 @@ export interface Telemetry {
 }
 export function initialTelemetry(best = 0): Telemetry {
   return {
+    radar: [],
+    lowGravity: false,
     phase: 'menu',
     distance: 0,
     speed: 0,

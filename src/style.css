@@ -1390,3 +1390,94 @@ kbd {
     transition-duration: 0.01ms !important;
   }
 }
+
+.threat-radar {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.threat-marker {
+  position: absolute;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  transform: translate(-50%, -100%);
+  padding: 7px 9px;
+  border: 1px solid #a4d8df44;
+  border-left: 2px solid #9dd6dd;
+  background: #071520e8;
+  color: #aedee1;
+  max-width: 190px;
+  transition:
+    left 0.08s linear,
+    top 0.08s linear;
+}
+.threat-glyph {
+  font: 22px var(--mono);
+  line-height: 1;
+}
+.threat-marker b {
+  display: block;
+  font: 10px var(--mono);
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+.threat-marker small {
+  display: block;
+  font: 7px var(--mono);
+  margin-top: 4px;
+  color: #99b6c1;
+  letter-spacing: 0.04em;
+}
+.threat-marker.urgent {
+  border-color: #f4a86c88;
+  border-left-color: #f4a86c;
+  color: #ffc28f;
+  background: #261c17e8;
+}
+.threat-marker.urgent small {
+  color: #d7a580;
+}
+@media (max-width: 760px) {
+  .threat-marker {
+    max-width: 150px;
+    padding: 6px;
+    gap: 5px;
+  }
+  .threat-marker b,
+  .threat-marker small {
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+  .threat-glyph {
+    font-size: 18px;
+  }
+}
+.route {
+  background: linear-gradient(180deg, #08131de0, #08111df2);
+  padding: 15px 18px 12px;
+}
+.route .station {
+  color: #8ba2af;
+}
+.route .station.passed {
+  color: #a2c9ca;
+}
+.route .station.current {
+  color: var(--accent);
+}
+.route .route-biomes {
+  color: #7898a7;
+}
+.route .route-biomes .active {
+  color: #c0dbe0;
+}
+@media (max-width: 760px) {
+  .route {
+    padding: 12px 9px;
+  }
+  .threat-marker small {
+    font-size: 7px;
+  }
+}
