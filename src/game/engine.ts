@@ -11,6 +11,14 @@ import { updateInstanceBatch } from './render-batches';
 import { initializePhysics } from './physics';
 import { TerrainCompute } from './terrain-compute';
 import { Terrain } from './terrain';
+import {
+  BEAM_RANGE,
+  RAIL_RANGE,
+  RailCharge,
+  rayCircleDistance,
+  surfaceRayDistance,
+} from './weapons';
+import { WeaponEffects } from './weapon-effects';
 import { makeRover, makeEnemy, makeBackdrop, mat, disposeGroup } from './models';
 import {
   type Telemetry,
@@ -42,6 +50,9 @@ interface Enemy {
   seed: number;
   diving: boolean;
   collided: boolean;
+  maxHp: number;
+  melt: number;
+  melted: boolean;
 }
 interface Shot {
   mesh: T.Object3D;
@@ -51,10 +62,9 @@ interface Shot {
   vx: number;
   vy: number;
   life: number;
-  type: 'pulse' | 'flak' | 'rail' | 'seeker' | 'bomb' | 'beam' | 'seismic';
+  type: 'pulse' | 'flak' | 'seeker' | 'bomb' | 'seismic';
   damage: number;
   enemy: boolean;
-  hit: Set<Enemy>;
 }
 interface Particle {
   x: number;
@@ -133,6 +143,13 @@ export class Game {
   private elapsed = 0;
   private fireCooldown = 0;
   private skyCooldown = 0;
+  private railCharge = new RailCharge();
+  private beamTime = 0;
+  private beamSound = 0;
+  private weaponEffects!: WeaponEffects;
+  private beam = { x: 0, y: 0, length: 0, active: false };
+  private railFlash = { x: 0, y: 0, angle: 0, length: 0, life: 0 };
+  private meltColor = new T.Color('#ff6622');
   private invulnerable = 0;
   private spawnAt = 3;
   private jumpHeld = 0;
@@ -283,7 +300,6 @@ export class Game {
           type: 'pulse',
           damage: 1,
           enemy: i >= 120,
-          hit: new Set(),
         });
       }
       this.particleMesh = new T.InstancedMesh(
@@ -294,6 +310,7 @@ export class Game {
       this.particleMesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
       this.particleMesh.frustumCulled = false;
       this.scene.add(this.particleMesh);
+      this.weaponEffects = new WeaponEffects(this.scene);
       for (let i = 0; i < 800; i++)
         this.particles.push({ x: 0, y: -100, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1 });
       this.seedPreview();
@@ -430,6 +447,9 @@ export class Game {
     this.lastGrounded = true;
     this.fireCooldown = 0;
     this.skyCooldown = 0;
+    this.railCharge.reset();
+    this.weaponEffects.reset();
+    this.stopWeapons();
     this.accumulator = 0;
     this.rearCooldown = 0;
     this.keys.clear();
@@ -443,6 +463,7 @@ export class Game {
       this.state.phase = 'paused';
       this.keys.clear();
       this.touch.clear();
+      this.stopWeapons();
     } else if (this.state.phase === 'paused') {
       this.state.phase = 'playing';
       this.accumulator = 0;
@@ -459,6 +480,7 @@ export class Game {
     this.state.capacitor = 100;
     this.state.heat = 0;
     this.state.lockout = 0;
+    this.stopWeapons();
     this.announce('ROVER SERVICED · ROUTE RESUMED');
     this.emit();
   }
@@ -478,6 +500,10 @@ export class Game {
   }
   toggleAudio() {
     this.audio.toggle();
+    this.emit();
+  }
+  cancelWeaponInput() {
+    this.stopWeapons();
     this.emit();
   }
   private announce(message: string) {
@@ -618,7 +644,9 @@ export class Game {
     this.rearCooldown = Math.max(0, this.rearCooldown - dt);
     this.fireCooldown -= dt;
     this.skyCooldown -= dt;
-    if (input.fire && !input.vent && s.lockout <= 0) this.fire();
+    this.weaponEffects.step(dt);
+    this.railFlash.life = Math.max(0, this.railFlash.life - dt);
+    this.fire(input, dt);
     if (input.vent && s.heat > 5) {
       for (const e of this.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < 4) e.hp -= dt * 5;
       if (Math.random() < 0.3) this.burst(p.x, p.y, 2);
@@ -663,6 +691,7 @@ export class Game {
     }
     if (s.distance >= FINISH && s.boss <= 0) {
       s.phase = 'complete';
+      this.stopWeapons();
       s.score += 5000;
       this.saveBest();
       this.audio.checkpoint();
@@ -680,36 +709,155 @@ export class Game {
               ? 'HEAVY BOMBER INBOUND'
               : '';
   }
-  private fire() {
+  private stopWeapons() {
+    this.railCharge.cancel();
+    this.beam.active = false;
+    this.beamTime = 0;
+    this.beamSound = 0;
+    this.railFlash.life = 0;
+    this.state.railCharge = 0;
+    this.state.beamActive = false;
+  }
+  private firingAngle(x: number, y: number) {
+    let target: Enemy | undefined,
+      nearest = Infinity;
+    for (const e of this.enemies) {
+      if (e.hp <= 0 || e.y <= 4 || Math.abs(e.x - x) >= 45) continue;
+      const distance = Math.hypot(e.x - x, e.y - y);
+      if (distance < nearest) {
+        nearest = distance;
+        target = e;
+      }
+    }
+    return target
+      ? clamp(Math.atan2(target.y - y, target.x - x), Math.PI / 4, (Math.PI * 3) / 4)
+      : Math.PI / 2;
+  }
+  private enemyRadius(e: Enemy) {
+    return e.kind === 'boss' ? 5 : e.kind === 'bomber' ? 2.5 : 1.5;
+  }
+  private groundMuzzle(x: number, y: number) {
+    const q = this.body.rotation(),
+      angle = 2 * Math.atan2(q.z, q.w);
+    return {
+      x: x + 2.92 * Math.cos(angle) - 0.6 * Math.sin(angle),
+      y: y + 2.92 * Math.sin(angle) + 0.6 * Math.cos(angle),
+    };
+  }
+  private railAim(x: number, y: number, firedAngle?: number) {
+    const q = this.body.rotation(),
+      bodyAngle = 2 * Math.atan2(q.z, q.w);
+    const baseX = x - 0.6 * Math.cos(bodyAngle) - 1.18 * Math.sin(bodyAngle);
+    const baseY = y - 0.6 * Math.sin(bodyAngle) + 1.18 * Math.cos(bodyAngle);
+    const angle = firedAngle ?? this.firingAngle(baseX, baseY);
+    return { x: baseX + 1.2 * Math.cos(angle), y: baseY + 1.2 * Math.sin(angle), angle, bodyAngle };
+  }
+  private sustainBeam(dt: number) {
+    const p = this.body.translation(),
+      { x, y } = this.groundMuzzle(p.x, p.y);
+    this.beamTime += dt;
+    if (
+      !addHeat(this.state, (28 + Math.min(1.5, this.beamTime) * 20) * dt) ||
+      this.state.lockout > 0
+    )
+      return;
+    let length = surfaceRayDistance(x, y, 1, 0, BEAM_RANGE, (x) =>
+      this.hazards.surfaceHeight(x, this.terrain.heightAt(x)),
+    );
+    let target: Enemy | undefined;
+    const core = this.hazards.coreOnRay(x, y, 1, 0, length);
+    if (core) length = core.distance;
+    for (const e of this.enemies) {
+      if (e.hp <= 0) continue;
+      const hit = rayCircleDistance(x, y, 1, 0, length, e.x, e.y, this.enemyRadius(e));
+      if (hit !== null && hit < length) {
+        length = hit;
+        target = e;
+      }
+    }
+    const damage = (6 + Math.min(1.5, this.beamTime) * 2) * dt;
+    if (target) {
+      target.hp -= damage;
+      if (target.kind === 'rock') {
+        target.melt = clamp(1 - target.hp / target.maxHp, 0, 1);
+        target.melted = target.hp <= 0;
+      }
+      if (target.kind === 'drone') target.diving = true;
+    } else if (core && core.distance <= length) {
+      if (this.hazards.strikeCore(core.x, core.y, damage, this.hazardEffects) === 'destroyed')
+        this.state.score += 150;
+    }
+    // The combat circle stays stable during melting; the visible contact moves
+    // inward with the shrinking rock instead of leaving a gap before its surface.
+    const visibleLength =
+      target?.kind === 'rock'
+        ? Math.max(length, target.x - x - Math.max(0.1, 1.05 * (1 - target.melt * 0.45)))
+        : length;
+    Object.assign(this.beam, { x, y, length: visibleLength, active: true });
+    this.beamSound -= dt;
+    if (this.beamSound <= 0) {
+      this.audio.tone(180 + this.beamTime * 40, 0.12, 'triangle', 0.08, 0, 130);
+      this.beamSound = 0.1;
+    }
+  }
+  private dischargeRail(strength: number) {
+    const p = this.body.translation(),
+      { x, y, angle } = this.railAim(p.x, p.y);
+    const dx = Math.cos(angle),
+      dy = Math.sin(angle);
+    if (!addHeat(this.state, 10 + strength * 10)) return;
+    let length = surfaceRayDistance(x, y, dx, dy, RAIL_RANGE, (x) =>
+      this.hazards.surfaceHeight(x, this.terrain.heightAt(x)),
+    );
+    const core = this.hazards.coreOnRay(x, y, dx, dy, length);
+    if (core) length = core.distance;
+    const damage = 3 + strength * 7;
+    for (const e of this.enemies)
+      if (
+        e.hp > 0 &&
+        rayCircleDistance(x, y, dx, dy, length, e.x, e.y, this.enemyRadius(e)) !== null
+      ) {
+        e.hp -= damage;
+        if (e.kind === 'drone') e.diving = true;
+        this.burst(e.x, e.y, 4);
+      }
+    if (core && this.hazards.strikeCore(core.x, core.y, damage, this.hazardEffects) === 'destroyed')
+      this.state.score += 150;
+    Object.assign(this.railFlash, { x, y, angle, length, life: 0.16 });
+    this.audio.tone(900, 0.18, 'sawtooth', 0.2, 0, 90);
+    this.trauma = Math.max(this.trauma, 0.12 * strength);
+  }
+  private fire(input: Input, dt: number) {
     const p = this.body.translation();
     const s = this.state;
-    if (this.fireCooldown <= 0) {
+    this.beam.active = false;
+    const firing = input.fire && !input.vent && s.lockout <= 0;
+    if (this.loadout.ground === 'beam' && firing) this.sustainBeam(dt);
+    else {
+      this.beamTime = 0;
+      this.beamSound = 0;
+    }
+    if (this.loadout.ground !== 'beam' && firing && this.fireCooldown <= 0) {
       const w = this.loadout.ground,
-        heat = w === 'pulse' ? 7 : w === 'beam' ? 5 : 20;
+        heat = w === 'pulse' ? 7 : 20;
       if (addHeat(s, heat)) {
-        const damage = w === 'pulse' ? 1 : w === 'beam' ? 1.5 : 5;
-        this.shoot(
-          w === 'pulse' ? 'pulse' : w === 'beam' ? 'beam' : 'seismic',
-          p.x + 2.6,
-          p.y + 0.45,
-          70,
-          w === 'seismic' ? -4 : 0,
-          damage,
-          false,
-        );
-        this.fireCooldown = w === 'pulse' ? 0.15 : w === 'beam' ? 0.07 : 0.7;
+        const damage = w === 'pulse' ? 1 : 5;
+        this.shoot(w, p.x + 2.6, p.y + 0.45, 70, w === 'seismic' ? -4 : 0, damage, false);
+        this.fireCooldown = w === 'pulse' ? 0.15 : 0.7;
         this.audio.shot();
       }
     }
-    if (this.skyCooldown <= 0 && s.lockout <= 0) {
+    if (this.loadout.sky === 'rail') {
+      const before = this.railCharge.charge;
+      const strength = this.railCharge.update(input.fire, input.vent || s.lockout > 0, dt);
+      if (input.fire && this.railCharge.charge > before) addHeat(s, 6 * dt);
+      if (s.lockout > 0) this.railCharge.cancel();
+      else if (strength) this.dischargeRail(strength);
+    } else this.railCharge.cancel();
+    if (firing && this.loadout.sky !== 'rail' && this.skyCooldown <= 0 && s.lockout <= 0) {
       const w = this.loadout.sky;
-      const target = this.enemies
-        .filter((e) => e.y > 4 && Math.abs(e.x - p.x) < 45)
-        .sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x))[0];
-      const angle = target
-        ? clamp(Math.atan2(target.y - p.y, target.x - p.x), Math.PI / 4, (Math.PI * 3) / 4)
-        : Math.PI / 2;
-      if (addHeat(s, w === 'rail' ? 16 : w === 'seeker' ? 12 : 6)) {
+      const angle = this.firingAngle(p.x - 0.6, p.y + 2.3);
+      if (addHeat(s, w === 'seeker' ? 12 : 6)) {
         for (let i = 0; i < (w === 'seeker' ? 4 : 1); i++)
           this.shoot(
             w,
@@ -717,12 +865,19 @@ export class Game {
             p.y + 2.3,
             Math.cos(angle + (i - 1.5) * (w === 'seeker' ? 0.07 : 0)) * 40,
             Math.sin(angle) * 40,
-            w === 'rail' ? 7 : 2,
+            2,
             false,
           );
-        this.skyCooldown = w === 'rail' ? 1.1 : w === 'seeker' ? 0.85 : 0.36;
+        this.skyCooldown = w === 'seeker' ? 0.85 : 0.36;
       }
     }
+    if (s.lockout > 0) {
+      this.railCharge.cancel();
+      this.beam.active = false;
+      this.beamTime = 0;
+    }
+    s.railCharge = this.railCharge.charge;
+    s.beamActive = this.beam.active;
   }
   private shoot(
     type: Shot['type'],
@@ -748,12 +903,7 @@ export class Game {
     shot.mesh.visible = true;
     shot.mesh.position.set(x, y, 0.2);
     shot.mesh.rotation.z = Math.atan2(vy, vx);
-    shot.hit.clear();
-    shot.mesh.scale.set(
-      type === 'beam' ? 2.8 : type === 'rail' ? 0.16 : 0.45,
-      type === 'rail' ? 2 : 0.16,
-      0.16,
-    );
+    shot.mesh.scale.set(0.45, 0.16, 0.16);
   }
   private updateShots(dt: number) {
     const p = this.current;
@@ -783,18 +933,17 @@ export class Game {
         const hit = this.hazards.strikeCore(s.x, s.y, s.damage, this.hazardEffects);
         if (hit) {
           if (hit === 'destroyed') this.state.score += 150;
-          if (s.type !== 'rail') s.life = 0;
+          s.life = 0;
         }
       }
       if (!s.enemy && s.life > 0)
         for (const e of this.enemies) {
           const radius = e.kind === 'boss' ? 5 : e.kind === 'bomber' ? 2.5 : 1.5;
-          if (e.hp > 0 && !s.hit.has(e) && Math.hypot(s.x - e.x, s.y - e.y) < radius) {
+          if (e.hp > 0 && Math.hypot(s.x - e.x, s.y - e.y) < radius) {
             e.hp -= s.damage;
-            s.hit.add(e);
             this.burst(s.x, s.y, 5);
             if (e.kind === 'drone') e.diving = true;
-            if (s.type !== 'rail') s.life = 0;
+            s.life = 0;
             break;
           }
         }
@@ -828,21 +977,25 @@ export class Game {
     const group = makeEnemy(kind);
     group.position.set(x, y, 0);
     this.scene.add(group);
+    const hp =
+      kind === 'boss'
+        ? 100
+        : kind === 'bomber'
+          ? 10
+          : kind === 'rock'
+            ? 3
+            : kind === 'hunter'
+              ? 7
+              : 2;
     this.enemies.push({
       group,
       kind,
       x,
       y,
-      hp:
-        kind === 'boss'
-          ? 100
-          : kind === 'bomber'
-            ? 10
-            : kind === 'rock'
-              ? 3
-              : kind === 'hunter'
-                ? 7
-                : 2,
+      hp,
+      maxHp: hp,
+      melt: 0,
+      melted: false,
       timer: 0,
       seed: x,
       diving: false,
@@ -914,8 +1067,21 @@ export class Game {
         e.y = -2 + Math.max(0, 1 - Math.abs(e.x - p.x) / 12) * 8;
       }
       e.group.position.set(e.x, e.y, 0);
+      if (e.kind === 'rock' && e.melt > 0) {
+        e.group.scale.set(1 - e.melt * 0.45, 1 - e.melt * 0.7, 1 - e.melt * 0.45);
+        e.group.position.y -= e.melt * 0.3;
+        for (const child of e.group.children)
+          if (child instanceof T.Mesh && child.material instanceof T.MeshStandardMaterial) {
+            child.material.emissive.copy(this.meltColor);
+            child.material.emissiveIntensity = e.melt * 2;
+            child.material.roughness = 0.9 - e.melt * 0.5;
+          }
+      }
       if (e.kind === 'drone') e.group.rotation.z = (e.x - prevX) * 0.4;
-      if (e.hp > 0 && Math.hypot(e.x - p.x, e.y - p.y) < (e.kind === 'rock' ? 2.6 : 2.3)) {
+      if (
+        e.hp > 0 &&
+        Math.hypot(e.x - p.x, e.y - p.y) < (e.kind === 'rock' ? 2.6 - e.melt * 0.7 : 2.3)
+      ) {
         e.collided = true;
         this.hurt(e.kind === 'rock' ? 18 : 22);
         e.hp = 0;
@@ -925,9 +1091,14 @@ export class Game {
           this.state.kills += e.kind === 'rock' ? 0 : 1;
           this.state.score += e.kind === 'boss' ? 4000 : e.kind === 'rock' ? 75 : 200;
         }
-        this.burst(e.x, e.y, e.kind === 'boss' ? 100 : 35);
-        this.audio.blast(clamp((e.x - p.x) / 35, -1, 1));
-        this.trauma = 0.25;
+        if (e.melted) {
+          this.weaponEffects.melt(e.x, this.hazards.surfaceHeight(e.x, this.terrain.heightAt(e.x)));
+          this.audio.tone(140, 0.25, 'triangle', 0.1, clamp((e.x - p.x) / 35, -1, 1), 35);
+        } else {
+          this.burst(e.x, e.y, e.kind === 'boss' ? 100 : 35);
+          this.audio.blast(clamp((e.x - p.x) / 35, -1, 1));
+          this.trauma = 0.25;
+        }
         if (e.kind === 'mine') this.terrain.carve(e.x, this.terrain.heightAt(e.x), 3, 2);
         if (e.kind === 'boss') this.state.boss = 0;
       }
@@ -998,6 +1169,7 @@ export class Game {
     } catch {}
     if (this.state.hull <= 0) {
       this.state.phase = 'dead';
+      this.stopWeapons();
       this.saveBest();
       this.emit();
     }
@@ -1011,6 +1183,7 @@ export class Game {
     s.reportBonus = checkpointBonus(s.reportTime, s.reportKills, s.reportClean, s.reportDamage);
     s.score += s.reportBonus;
     s.phase = 'report';
+    this.stopWeapons();
     this.keys.clear();
     this.touch.clear();
     this.reportMark = { time: s.time, kills: s.kills, clean: s.clean, damage: 0 };
@@ -1071,10 +1244,12 @@ export class Game {
     const boost = this.state.phase === 'playing' && input.boost && this.state.capacitor > 0;
     this.rover.flame.visible = boost;
     this.rover.flame.scale.x = 0.8 + Math.random() * 0.7;
-    const target = this.enemies.find((e) => e.y > 4 && e.x > p.x && e.x < p.x + 35);
-    this.rover.turret.rotation.z = target
-      ? -clamp(Math.atan2(target.x - p.x, target.y - p.y), -0.75, 0.75)
-      : 0;
+    const railAim = this.railAim(
+      p.x,
+      p.y,
+      this.railFlash.life > 0 ? this.railFlash.angle : undefined,
+    );
+    this.rover.turret.rotation.z = railAim.angle - Math.PI / 2 - railAim.bodyAngle;
     const fov = menu ? 45 : boost ? 65 : 48;
     this.camera.fov = T.MathUtils.lerp(this.camera.fov, fov, 1 - Math.exp(-dt * 3));
     this.camera.updateProjectionMatrix();
@@ -1152,6 +1327,21 @@ export class Game {
     );
     (this.scene.fog as T.FogExp2).color.copy(this.scene.background as T.Color);
     this.lighting.update(this.state.biome, p, dt);
+    // Attach the sustained beam to the interpolated rover, avoiding muzzle gaps.
+    const beamMuzzle = this.groundMuzzle(p.x, p.y);
+    this.weaponEffects.render(
+      {
+        ...this.beam,
+        x: beamMuzzle.x,
+        y: beamMuzzle.y,
+        length: Math.max(0, this.beam.x + this.beam.length - beamMuzzle.x),
+        active: this.beam.active && this.state.phase === 'playing',
+      },
+      { ...this.railFlash, x: railAim.x, y: railAim.y },
+      this.state.phase === 'playing' ? this.railCharge.charge : 0,
+      railAim.x,
+      railAim.y,
+    );
     for (let team = 0; team < 2; team++) {
       updateInstanceBatch(
         this.shotBatches[team],

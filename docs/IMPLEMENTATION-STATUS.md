@@ -9,7 +9,7 @@ Full requirements validation must be checked against that document, including it
 | WebGPU architecture | Three.js WebGPURenderer, PBR surfaces/lighting, manual quality presets, optional HDR bloom/lens effects, batching, native WGSL brush, React 19, TypeScript, Rapier, Framer Motion             | Volumetric fog/dust, screen-space shadows, measured frame/memory budgets                                  |
 | Rover               | Six independent raycast wheels, fixed-step physics, cruise/brake/boost, jump/hover/pitch with input grace/buffering, slope-matched clean-landing momentum rewards                             | Steering articulation, richer suspension rig, replay determinism                                          |
 | Camera              | Side-on view, 65-degree boost FOV and forward lead, landing/impact shake, responsive framing                                                                                                  | Perlin trauma and authored cinematic checkpoint camera                                                    |
-| Weapons             | All six distinct loadouts, thermal lockout, vent, rear EMP, seismic fracture of nearby bridges                                                                                                | Continuous beam melting/slag; hold-to-charge rail; full surface shockwave effects                         |
+| Weapons             | Six loadouts, continuous Beam with rock melting/visual slag, charged hitscan Railgun penetration, thermal lockout, vent, rear EMP, seismic bridge fracture                                    | Full surface shockwaves; broader weapon/enemy balance and physical-input validation                       |
 | Enemies             | Drone V waves/dives, bombers, hunter lift, interceptor telegraphs, mines, skimmers, leeches, mothership, distance-authored encounters                                                         | Advanced flocking, bomber weakpoint/shield, tractor steering disable, human difficulty/balance validation |
 | Mutable terrain     | Bounded small-mesh CPU brush, retained WGSL/readback for larger jobs, atomic multi-chunk mesh/collider commits, contact-triggered destructible bridge colliders                               | Radial bowl rather than voxel SDF; no overhangs, synthesis, resident GPU heightmap, or physics worker     |
 | Particles           | Bounded 800-instance debris pool with CPU ballistic motion, ground bounce, and active-only instance uploads/draws                                                                             | GPU simulation, 200,000-particle target, rover/debris collision                                           |
@@ -21,7 +21,7 @@ Full requirements validation must be checked against that document, including it
 ## Validation evidence
 
 - TypeScript and Vite production build passed.
-- The current 37-test regression suite passes, including physics initialization, batching, jump assistance, encounter pacing, biome hazards, and atomic crater rollback/disposal, small-brush routing, unchanged edits, and overlapping explosions.
+- The current 43-test regression suite includes physics initialization, batching, jump assistance, encounter pacing, biome hazards, atomic crater rollback/disposal, small-brush routing, overlapping explosions, rail charge/cancellation, ray occlusion, and bounded weapon effects. See the weapon pass for validation conditions.
 - Headless Edge WebGPU browser checks passed with zero console errors: loadout selection, driving, six grounded wheel contacts, jump, capacitor use, firing, pause/resume, manual Escape handling, checkpoint/service, thermal lockout, boss destruction, completion, death/retry, and no horizontal overflow at 390 px.
 - The browser scenario harness uses controlled positioning and invulnerability in the boss test. It verifies state/combat wiring, not difficulty or fair survival balance.
 - GPU crater center changed from approximately 0.5372 to -3.4628; Rapier raycast returned -3.4628 after the update.
@@ -78,7 +78,11 @@ This capture meets the small-brush commit budget on the measured host. WebGL fra
 
 ## Repository and Pages handoff
 
-The gameplay and October 10 graphics release are merged on `main`; its Pages deployment and hosted checks passed. Merged graphics branches were removed. The Pages mode builds for `/KnotzMoonPatrol/`; the production browser test validates assets, presets, launch, controls, pause/resume, mobile width, and absent developer hooks. The pinned Actions workflow validates pull requests and deploys successful `main` builds.
+See [the weapon continuation](WEAPONS-PASS.md) for the continuous Beam, charged Railgun, controls, bounded effects, and regression/performance methodology. Weapon charge is cancelled safely on interruption; the production browser check now selects this loadout and exercises visible charge/release.
+
+The final local source passes 43 unit tests with the recorded startup allowance, both-backend weapon and production scenarios, gameplay/boss/retry, hazards, and all-biome graphics. Frame-time captures retain variability rather than claiming 60 FPS; active effects add two draws at full slag capacity. CI uses the repository's unchanged test defaults.
+
+Gameplay, graphics, and terrain continuations are merged on `main`, with successful Pages deployment and hosted checks. Merged feature branches were removed. The Pages mode builds for `/KnotzMoonPatrol/`; the production browser test validates assets, presets, launch, controls, charged weapons, pause/resume, mobile width, and absent developer hooks. The pinned Actions workflow validates pull requests and deploys successful `main` builds.
 
 See [deployment](DEPLOYMENT.md) and [world-detail handoff](WORLD-DETAIL-HANDOFF.md). Publishing/integration readiness does not close the product acceptance gates below.
 

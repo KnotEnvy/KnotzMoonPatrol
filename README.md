@@ -30,6 +30,7 @@ npm run test:browser
 npm run test:streaming
 npm run test:hazards
 npm run test:graphics
+npm run test:weapons
 npm run test:terrain -- current
 npm run test:performance -- current
 ```
@@ -64,6 +65,8 @@ The Pages build uses `/KnotzMoonPatrol/` while ordinary development stays at `/`
 Touch controls appear on narrow/coarse-pointer screens.
 Standard gamepad: left stick speed/pitch, A jump, X fire, B vent, bumpers brake/boost, Start pause.
 Gamepad mappings and vibration need physical-device validation.
+
+Resonance Beam stays active while Fire is held. Tachyon Railgun charges on hold and fires on release; build at least a quarter charge. Venting or pausing cancels charge. The HUD shows charge and readiness. See [weapon behavior and validation](docs/WEAPONS-PASS.md).
 
 ## Graphics
 
@@ -108,6 +111,7 @@ See [the October gameplay pass](docs/GAMEPLAY-PASS.md) for behavior and evidence
 | `src/game/surfaces.ts`, `src/game/lighting.ts`                     | Biome surface maps and shared biome/headlight rig                            |
 | `src/game/route.ts`, `src/game/hazards.ts`, `src/game/movement.ts` | Authored encounters, physical biome hazards, buffered jumps, landing rewards |
 | `src/game/audio.ts`                                                | Procedural soundtrack and feedback                                           |
+| `src/game/weapons.ts`, `src/game/weapon-effects.ts`                | Charge timing, ray/terrain tests, bounded energy and slag effects            |
 | `src/App.tsx`, `src/style.css`                                     | Interface, input hints, loadout dialogs, responsive HUD                      |
 
 The rover's horizontal speed uses an impulse servo for arcade handling; the six suspension contacts use Rapier's vehicle controller. Physics stepping is fixed, but cross-platform deterministic replay is **not** claimed. Visual debris uses an 800-instance CPU-updated pool; it is **not** the PRD's 200,000-particle GPU system.

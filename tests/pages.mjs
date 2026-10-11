@@ -163,9 +163,24 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator('.touch-controls')).toBeVisible();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'RETURN TO BASE' }).click();
+    await page.getByRole('button', { name: 'CONFIGURE ROVER' }).click();
+    await page.getByRole('button', { name: /Resonance Beam/ }).click();
+    await page.getByRole('button', { name: /Tachyon Railgun/ }).click();
+    await page.getByRole('button', { name: 'CONFIRM LOADOUT' }).click();
+    await launch.click();
+    const charge = page.getByRole('progressbar', { name: 'Tachyon charge' });
+    await expect(charge).toBeVisible();
+    await page.keyboard.down('KeyJ');
+    await expect(charge).toHaveAttribute('aria-valuenow', '100', { timeout: 30000 });
+    await page.keyboard.up('KeyJ');
+    await expect(charge).toHaveAttribute('aria-valuenow', '0', { timeout: 15000 });
+    const weaponRelease = true;
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
     assert.deepEqual(pageErrors, []);
     errors.push(...pageErrors);
-    results.push({ mode, backend, heat, assets, errors: pageErrors });
+    results.push({ mode, backend, heat, weaponRelease, assets, errors: pageErrors });
     await page.screenshot({
       path: path.join(root, 'test-results/pages-' + mode + '.jpg'),
       type: 'jpeg',

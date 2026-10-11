@@ -24,6 +24,7 @@ npm run test:browser
 npm run test:streaming
 npm run test:hazards
 npm run test:graphics
+npm run test:weapons
 npm run test:terrain -- world-detail
 npm run test:performance -- world-detail
 ```
@@ -87,6 +88,6 @@ Verify all five biomes, warning silhouettes, desktop/mobile readability, WebGL f
 
 ## Readiness boundary
 
-Deployment readiness is separate from full PRD acceptance. Current open gates include sustained 60 FPS, the two-frame crater budget, measured input latency, full-run balance, and real mobile/gamepad validation. GPU particles, cinematic post-processing/weather, richer weapon/enemy behavior, and 3D spatial audio remain unfinished.
+Deployment readiness is separate from full PRD acceptance. Current open gates include sustained 60 FPS, broader two-frame crater presentation checks, measured input latency, full-run balance, and real mobile/gamepad validation. The [continuous Beam/charged Railgun](WEAPONS-PASS.md) is implemented with bounded visual effects. GPU particles, weather/screen-space effects, remaining enemy depth/surface shockwaves, and 3D spatial audio remain unfinished.
 
 Keep those items explicit in `IMPLEMENTATION-STATUS.md`. World-detail work should improve the experience without turning unfinished targets into readiness claims.

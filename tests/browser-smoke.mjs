@@ -153,7 +153,8 @@ try {
     g.previous.copy(g.current);
     let locked = false;
     for (let i = 0; i < 4200 && g.state.phase === 'playing'; i++) {
-      g.step({ ...none, fire: true });
+      // Charged rail fires on release; the ground battery still fires while held.
+      g.step({ ...none, fire: i % 66 !== 65 });
       locked ||= g.state.lockout > 0;
     }
     const boss = { hp: g.state.boss, phase: g.state.phase, distance: g.state.distance, locked };
