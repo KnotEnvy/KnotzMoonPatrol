@@ -7,8 +7,10 @@ import os from 'node:os';
 await fs.mkdir('test-results', { recursive: true });
 const label = process.argv[2] ?? 'current';
 const quality = process.argv[3] ?? 'balanced';
+const scenario = process.argv[4] ?? 'idle';
 assert(/^[a-z0-9-]+$/i.test(label), 'Use a simple filename label');
 assert(['performance', 'balanced', 'cinematic'].includes(quality), 'Use a valid graphics preset');
+assert(['idle', 'weapons'].includes(scenario), 'Use idle or weapons');
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const results = [];
 try {
@@ -23,14 +25,21 @@ try {
     url.searchParams.set('quality', quality);
     if (mode === 'webgl') url.searchParams.set('renderer', 'webgl');
     await page.goto(url.href);
+    if (scenario === 'weapons') {
+      await page.getByRole('button', { name: 'CONFIGURE ROVER' }).click();
+      await page.getByRole('button', { name: /Resonance Beam/ }).click();
+      await page.getByRole('button', { name: /Tachyon Railgun/ }).click();
+      await page.getByRole('button', { name: 'CONFIRM LOADOUT' }).click();
+    }
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .click({ timeout: 60000 });
-    const metrics = await page.evaluate(async () => {
+    const metrics = await page.evaluate(async (scenario) => {
       const g = window.__voidRunner;
       g.invulnerable = 999;
       g.spawnAt = Infinity;
       const originalStep = g.step.bind(g);
+      let weaponTick = 0;
       const fill = () => {
         // Fixed camera/terrain window; real physics and combat continue stepping.
         g.body.setTranslation({ x: 32, y: 3, z: 0 }, true);
@@ -68,9 +77,21 @@ try {
             max: 1,
           });
         }
+        if (scenario === 'weapons') {
+          // Sustain the graphics workload; thermal balance is covered by weapons.mjs.
+          g.state.heat = 0;
+          g.state.lockout = 0;
+          g.weaponEffects.pools.forEach((pool, i) =>
+            Object.assign(pool, {
+              x: 28 + (i % 4) * 5,
+              y: g.terrain.heightAt(28 + (i % 4) * 5),
+              life: 4,
+            }),
+          );
+        }
       };
       g.step = (input) => {
-        originalStep(input);
+        originalStep(scenario === 'weapons' ? { ...input, fire: ++weaponTick % 84 !== 0 } : input);
         fill();
       };
       fill();
@@ -78,7 +99,9 @@ try {
         shots = [],
         particles = [],
         calls = [],
-        geometries = [];
+        geometries = [],
+        energy = [],
+        slag = [];
       let previous,
         ticks = 0;
       await new Promise((resolve) => {
@@ -90,6 +113,8 @@ try {
             // render.calls is cumulative in Three r180; drawCalls is per frame.
             calls.push(g.renderer.info.render.drawCalls);
             geometries.push(g.renderer.info.memory.geometries);
+            energy.push(g.weaponEffects.energy.count);
+            slag.push(g.weaponEffects.slag.count);
           }
           previous = now;
           if (frames.length < 240) requestAnimationFrame(tick);
@@ -130,13 +155,20 @@ try {
         activeParticles: summarize(particles),
         drawCalls: summarize(calls),
         geometries: summarize(geometries),
+        energyInstances: summarize(energy),
+        slagInstances: summarize(slag),
         rawFrameMs: frames,
       };
-    });
+    }, scenario);
     assert.equal(metrics.backend, mode === 'webgpu' ? 'WEBGPU' : 'WEBGL 2');
     assert.equal(metrics.quality, quality);
     assert(metrics.activeShots.min >= 100, 'Stress fixture lost projectile occupancy');
     assert(metrics.activeParticles.min >= 600, 'Stress fixture lost debris occupancy');
+    if (scenario === 'weapons') {
+      assert(metrics.energyInstances.min > 0 && metrics.energyInstances.max <= 6);
+      assert.equal(metrics.slagInstances.min, 16);
+      assert.equal(metrics.slagInstances.max, 16);
+    }
     assert.deepEqual(errors, []);
     results.push({ mode, ...metrics, errors });
     console.log('PERFORMANCE', JSON.stringify({ ...results.at(-1), rawFrameMs: undefined }));
@@ -159,6 +191,7 @@ try {
         fixture:
           'fixed arena; real simulation; 100 projectiles; 600 CPU debris; 90 warmup + 240 sampled frames',
         acceptance: false,
+        scenario,
         results,
       },
       null,

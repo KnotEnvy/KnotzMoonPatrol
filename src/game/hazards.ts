@@ -4,6 +4,7 @@ import { HAZARDS, advanceHazard, type HazardClock, type HazardDefinition } from 
 import { baseHeight } from './rules';
 import { box, mat, disposeGroup } from './models';
 import { batchStaticMeshes } from './render-batches';
+import { rayCircleDistance } from './weapons';
 
 export interface HazardEffects {
   hurt: (amount: number) => void;
@@ -329,6 +330,16 @@ export class Hazards {
         return 'hit';
       }
     return null;
+  }
+  coreOnRay(x: number, y: number, dx: number, dy: number, range: number) {
+    let closest: { x: number; y: number; distance: number } | null = null;
+    for (const h of this.active.values()) {
+      if (!['crystal', 'laser'].includes(h.def.kind) || h.phase === 'spent') continue;
+      const distance = rayCircleDistance(x, y, dx, dy, range, h.def.x, h.y + 1, 2);
+      if (distance !== null && (!closest || distance < closest.distance))
+        closest = { x: h.def.x, y: h.y + 1, distance };
+    }
+    return closest;
   }
   fractureNear(x: number, radius: number) {
     for (const h of this.active.values())

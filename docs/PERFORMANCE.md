@@ -76,3 +76,32 @@ See [graphics evidence](GRAPHICS-PASS.md) for ownership, preset switching, visua
 The [terrain pass](TERRAIN-PASS.md) routes small meshes through a bounded CPU brush, retaining larger-job WGSL and validating shape equivalence. `npm run test:terrain -- label` uses an actual 1920×1080 canvas, 100 projectiles, 600 CPU debris, 48 alternating single/seam edits, and an overlapping burst. Timings run separately from other build/test jobs.
 
 The capture reports native cold/p95/maximum commit times of 4.1 / 4.9 / 5.4 ms and fallback 10.6 / 9.9 / 11.2 ms, with matching collider probes and no console errors. Frame samples span the warm edits: native median/p95/max 16.7 / 16.8 / 33.3 ms; fallback 16.7 / 66.8 / 100.1 ms. Fast terrain commits do not establish stable 60 FPS or full PRD acceptance. The detailed fixture, host, limitations, and raw evidence locations are recorded in the terrain pass.
+
+## October 10 continuous/charged weapon captures
+
+The [weapon pass](WEAPONS-PASS.md) keeps the existing presets and fixed-arena projectile/debris occupancy. An optional fourth argument, `weapons`, adds sustained Beam/charge/discharge shapes and sixteen slag pools. Core heat is reset deliberately to keep this rendering workload active; gameplay thermal/cancellation tests run separately. All captures use 100 projectiles, 600 CPU debris, 90 warmup frames, 240 sampled frames, and a 1920×976 canvas in a 1920×1080 viewport. They do not satisfy the native-1080p acceptance resolution.
+
+Host/browser match the October preset captures: Core i5-10300H, Windows 10.0.19045, Edge 155.0.4283.45; an independent WebGPU adapter request reports NVIDIA/Turing. Source baseline is `a7b21b8`. Idle capture is taken before implementation; subsequent captures use the weapon branch. Build/gameplay checks finished before captures. The first post-change idle run overlapped a formatting check; the later control repeat ran separately.
+
+| Capture                | Backend | Draws/frame | Median ms | p95 ms | Mean ms |
+| ---------------------- | ------- | ----------: | --------: | -----: | ------: |
+| before, idle Balanced  | WebGPU  |          78 |      16.7 |   66.6 |    23.8 |
+| before, idle Balanced  | WebGL 2 |          52 |      16.7 |   33.3 |    18.3 |
+| after, idle Balanced   | WebGPU  |          78 |      16.7 |  100.2 |    36.8 |
+| after, idle Balanced   | WebGL 2 |          52 |      16.7 |   83.2 |    28.7 |
+| idle control repeat    | WebGPU  |          78 |     116.9 |  200.4 |   111.5 |
+| idle control repeat    | WebGL 2 |          52 |      16.7 |  116.4 |    36.5 |
+| active Balanced        | WebGPU  |          80 |      33.3 |  166.9 |    62.1 |
+| active Balanced        | WebGL 2 |          54 |      33.2 |  149.3 |    47.2 |
+| active Balanced repeat | WebGPU  |          80 |      33.1 |  116.9 |    50.3 |
+| active Balanced repeat | WebGL 2 |          54 |      16.9 |  117.0 |    48.5 |
+| active Cinematic       | WebGPU  |          92 |      33.4 |  167.0 |    59.2 |
+| active Cinematic       | WebGL 2 |          54 |      16.7 |   66.7 |    27.2 |
+| active Performance     | WebGPU  |          54 |      16.7 |   83.6 |    31.6 |
+| active Performance     | WebGL 2 |          54 |      16.7 |   83.2 |    29.2 |
+
+Active effects add two draws at full slag capacity without adding lights, shadow passes, or projectile/debris capacity. All recorded occupancy, effect bounds (at most six energy shapes / sixteen slag pools), and console-error assertions pass. Native Cinematic bloom remains enabled; fallback has no bloom or shadows.
+
+The idle control's large timing change and differing fallback timings for identical device-ratio-1 rendering show substantial capture variability. They do not isolate its cause or rule out a performance regression. Local shell/import operations also slowed enough to trigger unchanged WASM unit-test timeouts; an isolated single-worker rerun passed. No preset establishes stable 60 FPS. Retain these tails and repeat on named acceptance hardware rather than inferring performance from draw counts.
+
+Reproduce with `npm run test:performance -- label balanced weapons` (or `cinematic` / `performance`); omit `weapons` for the original fixture. Raw timings, occupancy, effect counts, screenshots, and machine metadata are ignored `test-results/performance-weapons-*.json` and related images.

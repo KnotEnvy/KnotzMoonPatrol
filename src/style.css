@@ -545,6 +545,50 @@ kbd {
   display: grid;
   gap: 18px;
 }
+.weapon-status {
+  position: absolute;
+  top: 160px;
+  left: 3.5%;
+  width: min(320px, 90%);
+  padding: 9px 12px;
+  background: #07111dcc;
+  border-left: 2px solid var(--accent);
+  font: 8px var(--mono);
+  letter-spacing: 0.06em;
+  color: #addfe8;
+  display: grid;
+  gap: 9px;
+}
+.rail-charge span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rail-charge b {
+  color: #dac5ff;
+}
+.rail-charge > div {
+  height: 3px;
+  margin-top: 7px;
+  background: #bd98ec33;
+  overflow: hidden;
+}
+.rail-charge i {
+  display: block;
+  height: 100%;
+  background: #c8a2ff;
+  transform-origin: left;
+}
+.rail-charge.ready {
+  color: #f3e4ff;
+}
+@media (max-width: 600px) {
+  .weapon-status {
+    top: 125px;
+    width: min(230px, 62%);
+    font-size: 6.5px;
+  }
+}
 .meter > div:first-child {
   display: flex;
   align-items: center;

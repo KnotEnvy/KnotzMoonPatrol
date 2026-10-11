@@ -100,6 +100,8 @@ export interface Telemetry {
   capacitor: number;
   heat: number;
   lockout: number;
+  railCharge: number;
+  beamActive: boolean;
   score: number;
   kills: number;
   clean: number;
@@ -130,6 +132,8 @@ export function initialTelemetry(best = 0): Telemetry {
     capacitor: 100,
     heat: 0,
     lockout: 0,
+    railCharge: 0,
+    beamActive: false,
     score: 0,
     kills: 0,
     clean: 0,

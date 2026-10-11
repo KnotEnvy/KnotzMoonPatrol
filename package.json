@@ -15,6 +15,7 @@
     "format": "prettier --write .",
     "test:hazards": "node tests/hazards.mjs",
     "test:graphics": "node tests/graphics.mjs",
+    "test:weapons": "node tests/weapons.mjs",
     "build:pages": "tsc -b && vite build --mode pages",
     "preview:pages": "vite preview --mode pages --host 127.0.0.1",
     "test:pages": "node tests/pages.mjs",

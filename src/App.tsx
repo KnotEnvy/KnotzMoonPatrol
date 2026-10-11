@@ -26,12 +26,12 @@ import { BIOMES, initialTelemetry, SECTOR_LENGTH, type Weapon, type SkyWeapon } 
 import { GRAPHICS_PRESETS, type GraphicsQuality } from './game/quality';
 const groundWeapons = [
   { id: 'pulse', name: 'Pulse Vulcan', detail: 'Rapid plasma · balanced heat' },
-  { id: 'beam', name: 'Resonance Beam', detail: 'Sustained energy · high heat' },
+  { id: 'beam', name: 'Resonance Beam', detail: 'Hold to melt obstacles · rising heat' },
   { id: 'seismic', name: 'Seismic Spreader', detail: 'Surface shockwave · heavy impact' },
 ] as const;
 const skyWeapons = [
   { id: 'flak', name: 'Flak Cannon', detail: 'Airburst shells · swarm control' },
-  { id: 'rail', name: 'Tachyon Railgun', detail: 'Penetrating bolts · slow cadence' },
+  { id: 'rail', name: 'Tachyon Railgun', detail: 'Hold to charge · release to pierce' },
   { id: 'seeker', name: 'Seeker Missiles', detail: 'Four guided rockets · target tracking' },
 ] as const;
 const controls = [
@@ -39,7 +39,7 @@ const controls = [
   ['D / → / SHIFT', 'Overdrive · consumes capacitor'],
   ['SPACE', 'Jump · hold to hover'],
   ['A / D in air', 'Pitch for a clean landing'],
-  ['J / Z', 'Fire both weapon axes'],
+  ['J / Z', 'Fire both axes · hold/release for rail'],
   ['K / X', 'Vent the core'],
   ['R', 'Rear EMP · 20 capacitor'],
   ['ESC / P', 'Pause expedition'],
@@ -120,6 +120,10 @@ export default function App() {
     setHelp(false);
     setHangar(false);
     setGraphics(true);
+  };
+  const cancelTouch = (key: string) => {
+    if (key === 'KeyJ' && game.current?.touch.has(key)) game.current.cancelWeaponInput();
+    game.current?.touch.delete(key);
   };
   const full = async () => {
     try {
@@ -376,6 +380,34 @@ export default function App() {
                 </div>
               </div>
             </div>
+            {(ground === 'beam' || sky === 'rail') && (
+              <div className="weapon-status" aria-label="Weapon status">
+                {ground === 'beam' && (
+                  <span>{s.beamActive ? 'RESONANCE · FIRING' : 'RESONANCE · HOLD FIRE'}</span>
+                )}
+                {sky === 'rail' && (
+                  <div className={'rail-charge' + (s.railCharge >= 1 ? ' ready' : '')}>
+                    <span>
+                      {s.railCharge >= 1
+                        ? 'TACHYON READY · RELEASE FIRE'
+                        : s.railCharge > 0
+                          ? 'TACHYON CHARGING'
+                          : 'TACHYON · HOLD / RELEASE'}{' '}
+                      <b>{Math.round(s.railCharge * 100)}%</b>
+                    </span>
+                    <div
+                      role="progressbar"
+                      aria-label="Tachyon charge"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(s.railCharge * 100)}
+                    >
+                      <i style={{ transform: `scaleX(${s.railCharge})` }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {playing && (
               <div className="threat-radar" aria-label="Terrain scanner">
                 {s.radar.map((t) => (
@@ -518,8 +550,8 @@ export default function App() {
                 game.current?.touch.add(key);
               }}
               onPointerUp={() => game.current?.touch.delete(key)}
-              onPointerCancel={() => game.current?.touch.delete(key)}
-              onLostPointerCapture={() => game.current?.touch.delete(key)}
+              onPointerCancel={() => cancelTouch(key)}
+              onLostPointerCapture={() => cancelTouch(key)}
             >
               {label}
             </button>
@@ -669,6 +701,10 @@ export default function App() {
                 3 seconds at full heat. Checkpoints repair 25 hull.
               </p>
             </div>
+            <p className="service-note">
+              RESONANCE: HOLD FIRE TO MELT ROCKS. TACHYON: HOLD FIRE TO CHARGE, RELEASE TO SHOOT.
+              BUILD AT LEAST A QUARTER CHARGE. VENTING OR PAUSING CANCELS THE CHARGE.
+            </p>
             <button className="launch-button" onClick={() => setHelp(false)}>
               <span>UNDERSTOOD</span>
               <ArrowRight size={18} />
@@ -683,7 +719,7 @@ export default function App() {
             key="hangar"
           >
             <p className="modal-intro">
-              Both batteries fire together. Choose how you clear the way.
+              One Fire control powers both batteries. Choose how you clear the way.
             </p>
             <div className="loadout-picker">
               <h4>01 / FORWARD BATTERY</h4>
