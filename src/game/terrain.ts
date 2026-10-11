@@ -1,7 +1,8 @@
 import * as T from 'three/webgpu';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { baseHeight, BIOMES, biomeIndex, randomAt } from './rules';
-import { mat, box, disposeGroup, lunarTexture } from './models';
+import { mat, box, disposeGroup, disposeMaterial } from './models';
+import { biomeSurface } from './surfaces';
 import { TerrainCompute } from './terrain-compute';
 import { batchStaticMeshes } from './render-batches';
 interface Chunk {
@@ -60,9 +61,7 @@ export class Terrain {
     let material = this.materials.get(surfaceBiome);
     if (!material) {
       material = mat(BIOMES[surfaceBiome].ground, 0.1, 0.96);
-      material.map = lunarTexture();
-      material.bumpMap = material.map;
-      material.bumpScale = 0.18;
+      Object.assign(material, biomeSurface(surfaceBiome));
       this.materials.set(surfaceBiome, material);
       this.retainedMaterials.add(material);
     }
@@ -214,8 +213,7 @@ export class Terrain {
     }
     this.chunks.clear();
     for (const material of this.materials.values()) {
-      material.map?.dispose();
-      material.dispose();
+      disposeMaterial(material);
     }
     this.materials.clear();
     this.retainedMaterials.clear();

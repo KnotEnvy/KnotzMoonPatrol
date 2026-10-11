@@ -104,6 +104,22 @@ try {
     );
     const backend = await page.locator('.engine-label').innerText();
     if (mode === 'webgl') assert(backend.includes('WEBGL 2'));
+    await page.getByRole('button', { name: 'Graphics settings', exact: true }).click();
+    for (const preset of ['Performance', 'Cinematic', 'Balanced']) {
+      const choice = page.getByRole('button', { name: new RegExp('^' + preset) });
+      await choice.click();
+      await expect(choice).toHaveAttribute('aria-pressed', 'true');
+      // Wait for actual frame callbacks so production shader compilation is exercised.
+      await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            let remaining = 4;
+            const tick = () => (--remaining > 0 ? requestAnimationFrame(tick) : resolve());
+            requestAnimationFrame(tick);
+          }),
+      );
+    }
+    await page.getByRole('button', { name: 'DONE', exact: true }).click();
     await launch.click();
     await page.locator('.mission-screen').waitFor({ state: 'detached', timeout: 20000 });
     await page.locator('.hud').waitFor({ state: 'visible', timeout: 20000 });

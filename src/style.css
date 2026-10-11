@@ -822,6 +822,39 @@ kbd {
   color: #9ab0bd;
   margin: 0 0 25px;
 }
+.graphics-picker {
+  display: grid;
+  gap: 10px;
+}
+.graphics-picker button {
+  position: relative;
+  padding: 15px 18px;
+  text-align: left;
+  background: #0b1824;
+  border: 1px solid #7396a644;
+  color: #d6e7ec;
+}
+.graphics-picker button.selected {
+  border-color: var(--accent);
+  background: #17313b;
+}
+.graphics-picker b {
+  display: block;
+  font: 500 24px var(--display);
+}
+.graphics-picker span {
+  display: block;
+  font-size: 12px;
+  color: #a7bdc8;
+  margin-top: 5px;
+}
+.graphics-picker small {
+  position: absolute;
+  right: 14px;
+  top: 20px;
+  font: 8px var(--mono);
+  color: var(--accent);
+}
 .modal .launch-button {
   width: 100%;
   margin-top: 24px;

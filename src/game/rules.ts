@@ -1,3 +1,4 @@
+import type { GraphicsQuality } from './quality';
 export type Phase = 'menu' | 'playing' | 'paused' | 'report' | 'dead' | 'complete';
 export type Weapon = 'pulse' | 'beam' | 'seismic';
 export type SkyWeapon = 'flak' | 'rail' | 'seeker';
@@ -108,6 +109,7 @@ export interface Telemetry {
   warning: string;
   notice: string;
   backend: string;
+  quality: GraphicsQuality;
   fps: number;
   boss: number;
   best: number;
@@ -137,6 +139,7 @@ export function initialTelemetry(best = 0): Telemetry {
     warning: '',
     notice: '',
     backend: 'INITIALIZING',
+    quality: 'balanced',
     fps: 0,
     boss: 100,
     best,

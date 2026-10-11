@@ -4,24 +4,24 @@ Initial implementation: September 2026. Working title: Moon Patrol: Void Runner.
 The [original PRD v2.0](PRD.md) is the authoritative product target; the table records this prototype's actual scope.
 Full requirements validation must be checked against that document, including its acceptance criteria.
 
-| PRD area            | Current implementation                                                                                                                                                       | Remaining work                                                                                                 |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| WebGPU architecture | Three.js WebGPURenderer, PBR materials, shadows, static model/scenery batches, instanced projectiles, native WGSL terrain brush, React 19, TypeScript, Rapier, Framer Motion | Bloom, chromatic aberration, volumetric fog/dust, screen-space shadows, quality tiers                          |
-| Rover               | Six independent raycast wheels, fixed-step physics, cruise/brake/boost, jump/hover/pitch with input grace/buffering, slope-matched clean-landing momentum rewards            | Steering articulation, richer suspension rig, replay determinism                                               |
-| Camera              | Side-on perspective, speed FOV change, landing/impact shake, responsive framing                                                                                              | Perlin trauma and authored cinematic checkpoint camera                                                         |
-| Weapons             | All six distinct loadouts, thermal lockout, vent, rear EMP, seismic fracture of nearby bridges                                                                               | Continuous beam melting/slag; hold-to-charge rail; full surface shockwave effects                              |
-| Enemies             | Drone V waves/dives, bombers, hunter lift, interceptor telegraphs, mines, skimmers, leeches, mothership, distance-authored encounters                                        | Advanced flocking, bomber weakpoint/shield, tractor steering disable, human difficulty/balance validation      |
-| Mutable terrain     | Native GPU brush/readback and CPU fallback, atomic multi-chunk mesh/collider commits, contact-triggered destructible bridge colliders                                        | Radial bowl rather than voxel SDF; no overhangs or terrain synthesis; readback/performance budget remains open |
-| Particles           | Bounded 800-instance debris pool with CPU ballistic motion, ground bounce, and active-only instance uploads/draws                                                            | GPU simulation, 200,000-particle target, rover/debris collision                                                |
-| HUD                 | Responsive telemetry, world-projected terrain/aircraft/strike scanner, A–Z route, checkpoint reports, score, pause/retry/victory                                             | Spring-counted score cascades; instrumented transition smoothness                                              |
-| Biomes              | Five scenery/palette sets, altered gravity, ice response, crystal lasers, magma vents/bridges, concealed acid gaps, citadel lasers and low-gravity fields                    | Broader acid interactions, enemy camouflage, fully zero-G zones, weather, authored art/lighting depth          |
-| Audio               | Procedural rhythmic soundtrack, engine, boosts, weapons, warnings, stereo panning                                                                                            | PannerNode 3D spatialization, full reactive stems/mix, emergency priority arbitration                          |
-| Customization       | Six weapon choices and fixed RV-06 chassis                                                                                                                                   | Chassis/body customization and additional vehicle equipment                                                    |
+| PRD area            | Current implementation                                                                                                                                                                        | Remaining work                                                                                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| WebGPU architecture | Three.js WebGPURenderer, PBR surfaces/lighting, manual quality presets, optional HDR bloom/lens effects, batching, native WGSL brush, React 19, TypeScript, Rapier, Framer Motion             | Volumetric fog/dust, screen-space shadows, measured frame/memory budgets                                       |
+| Rover               | Six independent raycast wheels, fixed-step physics, cruise/brake/boost, jump/hover/pitch with input grace/buffering, slope-matched clean-landing momentum rewards                             | Steering articulation, richer suspension rig, replay determinism                                               |
+| Camera              | Side-on view, 65-degree boost FOV and forward lead, landing/impact shake, responsive framing                                                                                                  | Perlin trauma and authored cinematic checkpoint camera                                                         |
+| Weapons             | All six distinct loadouts, thermal lockout, vent, rear EMP, seismic fracture of nearby bridges                                                                                                | Continuous beam melting/slag; hold-to-charge rail; full surface shockwave effects                              |
+| Enemies             | Drone V waves/dives, bombers, hunter lift, interceptor telegraphs, mines, skimmers, leeches, mothership, distance-authored encounters                                                         | Advanced flocking, bomber weakpoint/shield, tractor steering disable, human difficulty/balance validation      |
+| Mutable terrain     | Native GPU brush/readback and CPU fallback, atomic multi-chunk mesh/collider commits, contact-triggered destructible bridge colliders                                                         | Radial bowl rather than voxel SDF; no overhangs or terrain synthesis; readback/performance budget remains open |
+| Particles           | Bounded 800-instance debris pool with CPU ballistic motion, ground bounce, and active-only instance uploads/draws                                                                             | GPU simulation, 200,000-particle target, rover/debris collision                                                |
+| HUD                 | Responsive telemetry, world-projected terrain/aircraft/strike scanner, A–Z route, checkpoint reports, score, pause/retry/victory                                                              | Spring-counted score cascades; instrumented transition smoothness                                              |
+| Biomes              | Five PBR surface/palette sets and blended lighting/headlights, altered gravity, ice response, crystal lasers, magma vents/bridges, concealed acid gaps, citadel lasers and low-gravity fields | Broader acid interactions, enemy camouflage, fully zero-G zones, weather, authored art/lighting depth          |
+| Audio               | Procedural rhythmic soundtrack, engine, boosts, weapons, warnings, stereo panning                                                                                                             | PannerNode 3D spatialization, full reactive stems/mix, emergency priority arbitration                          |
+| Customization       | Six weapon choices and fixed RV-06 chassis                                                                                                                                                    | Chassis/body customization and additional vehicle equipment                                                    |
 
 ## Validation evidence
 
 - TypeScript and Vite production build passed.
-- The current 27-test regression suite passes, including physics initialization, batching, jump assistance, encounter pacing, biome hazards, and atomic crater rollback/disposal.
+- The current 31-test regression suite passes, including physics initialization, batching, jump assistance, encounter pacing, biome hazards, and atomic crater rollback/disposal.
 - Headless Edge WebGPU browser checks passed with zero console errors: loadout selection, driving, six grounded wheel contacts, jump, capacitor use, firing, pause/resume, manual Escape handling, checkpoint/service, thermal lockout, boss destruction, completion, death/retry, and no horizontal overflow at 390 px.
 - The browser scenario harness uses controlled positioning and invulnerability in the boss test. It verifies state/combat wiring, not difficulty or fair survival balance.
 - GPU crater center changed from approximately 0.5372 to -3.4628; Rapier raycast returned -3.4628 after the update.
@@ -56,9 +56,21 @@ The interrupted gameplay pass is now implemented and validated. See [details and
 - HUD warnings were inspected on desktop and phone-sized browser viewports.
 - Fresh native GPU measurements: 288.9 ms cold single-chunk brush; 86.6 ms subsequent two-chunk brush. Terrain seam/collider integrity passes, while the two-frame timing gate remains open.
 
+## October 10 graphics continuation
+
+See [graphics changes and evidence](GRAPHICS-PASS.md). Three presets, optional WebGPU HDR bloom/lens effects, five owned surface sets, blended biome lighting/headlights, 65-degree boost framing, and an accurate FPS counter are implemented.
+
+31 unit tests pass. Native WebGPU/forced WebGL graphics and hazard scenarios pass, as do the gameplay/boss/retry and Pages production suites. The graphics suite covers high-density pixel caps, resource counters across repeated preset switches, all five surfaces, boost framing/lens input, mobile settings, preference persistence, and checkpoint/end-dialog handling. Screenshots were inspected. The Pages suite now exercises presets before its normal production input checks.
+
+The controlled heavy fixture retains 100 projectiles and 600 debris. Balanced preserves the previous draw counts (78 native / 52 fallback), Performance uses 52 native draws, and Cinematic uses 90 native draws. Frame-time tails still miss the stable-60-FPS gate; [measurements](PERFORMANCE.md) retain the full per-preset results. Native canvas size in this fixture is 1920 x 976, below the PRD's 1080p acceptance resolution.
+
+A fresh cold GPU carve measured 380.5 ms; a subsequent two-chunk carve measured 13.5 ms with matching seam/collider probes. The cold path and combat-load two-frame guarantee remain open. Volumetric weather/dust, screen-space shadows, GPU particles, richer authored art, and the remaining weapon/enemy/audio/customization work are still unfinished. No full human A-Z run or physical-device validation was added.
+
+This continuation is prepared locally on `codex/biome-graphics`; the existing hosted game is released through the validated main workflow.
+
 ## Repository and Pages handoff
 
-Completed work is consolidated on `main`. The Pages mode builds for `/KnotzMoonPatrol/`; the production browser test validates assets, launch, controls, pause/resume, mobile width, and absent developer hooks. The pinned Actions workflow validates pull requests and deploys successful `main` builds.
+The previous gameplay/deployment baseline is consolidated on `main`; the October 10 graphics continuation awaits integration. The Pages mode builds for `/KnotzMoonPatrol/`; the production browser test validates assets, presets, launch, controls, pause/resume, mobile width, and absent developer hooks. The pinned Actions workflow validates pull requests and deploys successful `main` builds.
 
 See [deployment](DEPLOYMENT.md) and [world-detail handoff](WORLD-DETAIL-HANDOFF.md). Publishing/integration readiness does not close the product acceptance gates below.
 
@@ -66,7 +78,7 @@ See [deployment](DEPLOYMENT.md) and [world-detail handoff](WORLD-DETAIL-HANDOFF.
 
 - [ ] Stable 60 FPS at 1080p under the specified sustained heavy load on baseline hardware.
 - [ ] Stable suspension across the entire authored/destructible route and all gravity transitions.
-- [ ] Terrain carve and collider update within two frames. Current cold headless measurements are about 270–370 ms.
+- [ ] Terrain carve and collider update within two frames. Latest cold capture: 380.5 ms; subsequent two-chunk capture: 13.5 ms. Combat-load guarantee remains open.
 - [ ] Measured end-to-end input latency below 32 ms.
 - [ ] Instrumented UI smoothness / zero layout shifts under stress.
 
