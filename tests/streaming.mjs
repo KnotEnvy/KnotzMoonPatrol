@@ -29,13 +29,13 @@ try {
         backend: g.state.backend,
         distance: g.state.distance,
         seconds: g.state.time,
-        gpuBrush: g.compute.available,
+        gpuComputeAvailable: g.compute.available,
         chunks: g.terrain.chunks.size,
         materials: g.terrain.materials.size,
       };
     });
     assert(streaming.chunks <= 7);
-    assert.equal(streaming.gpuBrush, mode === 'webgpu');
+    assert.equal(streaming.gpuComputeAvailable, mode === 'webgpu');
     // Render each biome after moving the active streaming window. This catches
     // texture/material lifecycle failures which pure simulation cannot observe.
     for (const x of [1200, 2300, 3400, 4500]) {

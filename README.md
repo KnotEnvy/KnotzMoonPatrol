@@ -30,6 +30,7 @@ npm run test:browser
 npm run test:streaming
 npm run test:hazards
 npm run test:graphics
+npm run test:terrain -- current
 npm run test:performance -- current
 ```
 
@@ -82,7 +83,7 @@ See [the graphics pass](docs/GRAPHICS-PASS.md) and [measurements](docs/PERFORMAN
 - Six-wheel Rapier raycast suspension, fixed 60 Hz physics, arcade speed control, jump/hover/pitch, clean-landing bonuses.
 - Three forward and three anti-air loadouts; shared thermal lockout; capacitor management; rear EMP.
 - Drone formations/dives, bombers, tractor hunters, interceptors, skimmers, mines, rocks, and leech threats.
-- Streamed heightfield meshes with WGSL crater brushes and atomic mesh/collider replacement after readback.
+- Streamed heightfields with bounded CPU crater brushes, retained WGSL for larger jobs, and atomic mesh/collider replacement.
 - React/Framer Motion HUD, reports, route progress, loadout menu, pause, retry, victory, and persistent best score.
 - Procedural Web Audio engine hum, rhythmic bass/percussion, boost arpeggios, weapon/impact cues, stereo panning.
 - Static rover, enemy, and scenery geometry batches; two projectile instance batches and active-only debris draws.
@@ -99,7 +100,7 @@ See [the October gameplay pass](docs/GAMEPLAY-PASS.md) for behavior and evidence
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | `src/game/engine.ts`                                               | Fixed-step loop, Rapier controller, combat, encounter lifecycle, progression |
 | `src/game/terrain.ts`                                              | Bounded chunk streaming, triangle meshes, collider replacement               |
-| `src/game/terrain-compute.ts`                                      | Native WGSL brush, shared WebGPU device, readback, CPU fallback              |
+| `src/game/terrain-compute.ts`                                      | Bounded small-mesh CPU brush; shared-device WGSL/readback for larger jobs    |
 | `src/game/rules.ts`                                                | Pure energy/scoring/progression rules and biome definitions                  |
 | `src/game/models.ts`                                               | Procedural rover, enemies, planet, mountains, surface textures               |
 | `src/game/render-batches.ts`                                       | Static geometry batching and dynamic instance packing                        |
@@ -117,6 +118,6 @@ The developer server exposes `window.__voidRunner` only in development for the b
 
 This is a working prototype, **not full PRD acceptance**. See [implementation status](docs/IMPLEMENTATION-STATUS.md) for implemented, simplified, and outstanding requirements.
 
-The cold GPU crater path was measured at roughly 270–370 ms during local headless tests; it does not meet the two-frame target. The repeatable render comparison is documented in [performance measurements](docs/PERFORMANCE.md); its fixed arena is not the full PRD acceptance workload. Do not treat this build as a verified 60 FPS release.
+The [terrain latency pass](docs/TERRAIN-PASS.md) removes GPU readback from current small-mesh edits. A native 1080p combat fixture measured a 5.4 ms maximum native commit and 11.2 ms fallback commit, with matching colliders. The broader two-frame presentation guarantee remains open. [Performance measurements](docs/PERFORMANCE.md) retain frame-time tails and fixture limitations; this is not a verified stable-60-FPS release.
 
 Reference APIs: [Three.js WebGPU renderer](https://threejs.org/manual/en/webgpurenderer), [Rapier raycast vehicle](https://rapier.rs/javascript3d/classes/DynamicRayCastVehicleController.html).

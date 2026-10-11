@@ -48,7 +48,7 @@ Production build, 11 unit tests, gameplay smoke, and WebGPU/WebGL all-biome stre
 
 ## October 10 graphics preset captures
 
-Source baseline: `4bb17a3`; new graphics work is on `codex/biome-graphics`. Headless Edge 155.0.4283.45, Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz, 31.8 GB RAM, Windows 10.0.19045; independently requested WebGPU adapter: NVIDIA/Turing. Preset captures ran serially after build/browser regressions finished.
+Source baseline: `4bb17a3`; graphics work was merged in release `2f474c8`. Headless Edge 155.0.4283.45, Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz, 31.8 GB RAM, Windows 10.0.19045; independently requested WebGPU adapter: NVIDIA/Turing. Preset captures ran serially after build/browser regressions finished.
 
 Each uses the unchanged fixed-arena geometry with 100 projectiles, 600 CPU debris, 90 warmup frames, and 240 sampled frames. All occupancy/error assertions pass. The viewport is 1920 x 1080; actual canvas is 1920 x 976 at device ratio 1. The fixture exercises default/cruise framing, not the changed boost camera.
 
@@ -70,3 +70,9 @@ Timing remains variable. WebGL has no bloom or shadows and the same canvas size/
 Reproduce with `npm run test:performance -- label balanced` (or `performance` / `cinematic`). The URL quality override prevents stored preferences from changing a capture. JSON/raw-frame/screenshot files use `test-results/performance-october-*.json` and related image names.
 
 See [graphics evidence](GRAPHICS-PASS.md) for ownership, preset switching, visuals, and production checks.
+
+## October 10 terrain commit budget
+
+The [terrain pass](TERRAIN-PASS.md) routes small meshes through a bounded CPU brush, retaining larger-job WGSL and validating shape equivalence. `npm run test:terrain -- label` uses an actual 1920×1080 canvas, 100 projectiles, 600 CPU debris, 48 alternating single/seam edits, and an overlapping burst. Timings run separately from other build/test jobs.
+
+The capture reports native cold/p95/maximum commit times of 4.1 / 4.9 / 5.4 ms and fallback 10.6 / 9.9 / 11.2 ms, with matching collider probes and no console errors. Frame samples span the warm edits: native median/p95/max 16.7 / 16.8 / 33.3 ms; fallback 16.7 / 66.8 / 100.1 ms. Fast terrain commits do not establish stable 60 FPS or full PRD acceptance. The detailed fixture, host, limitations, and raw evidence locations are recorded in the terrain pass.

@@ -33,14 +33,23 @@ try {
   assert.equal(driving.loadout.sky, 'rail');
   await page.keyboard.down('Space');
   await page.keyboard.down('KeyJ');
-  await page.waitForTimeout(650);
-  await page.keyboard.up('Space');
-  await page.keyboard.up('KeyJ');
+  // Wait for simulation evidence rather than assuming cold shader startup fits
+  // a fixed wall-clock hold. Keep both controls held until hover is exercised.
+  await page.waitForFunction(
+    () => {
+      const g = window.__voidRunner;
+      return g.body.translation().y > 3 && g.state.heat > 0 && g.state.capacitor < 99;
+    },
+    {},
+    { timeout: 15000 },
+  );
   const jump = await page.evaluate(() => ({
     y: window.__voidRunner.body.translation().y,
     heat: window.__voidRunner.state.heat,
     cap: window.__voidRunner.state.capacitor,
   }));
+  await page.keyboard.up('Space');
+  await page.keyboard.up('KeyJ');
   assert(jump.y > 3);
   assert(jump.heat > 0);
   assert(jump.cap < 100);
@@ -69,7 +78,8 @@ try {
       g.terrain.carve(32, before, 5, 4);
       await g.terrain.queue;
       const crater = {
-        gpu: g.compute.available,
+        gpuComputeAvailable: g.compute.available,
+        brushBackend: g.compute.lastBackend,
         before,
         after: g.terrain.heightAt(32),
         ms: performance.now() - t,

@@ -132,4 +132,44 @@ describe('crater commits across chunk boundaries', () => {
     create.mockRestore();
     f.world.free();
   });
+  it('does not replace colliders or upload geometry for an unchanged brush', async () => {
+    const f = await fixture();
+    try {
+      vi.mocked(f.terrain['compute'].carve).mockImplementation(async (vertices) => vertices);
+      const create = vi.spyOn(f.world, 'createCollider');
+      await f.terrain.carve(64, 0);
+      expect(create).not.toHaveBeenCalled();
+      expect(f.chunks.get(0)!.version).toBe(0);
+      expect(f.chunks.get(1)!.version).toBe(0);
+      expect(f.world.colliders.len()).toBe(2);
+    } finally {
+      f.dispose();
+    }
+  });
+  it('serializes overlapping blasts against the last committed surface', async () => {
+    const f = await fixture();
+    try {
+      const first = f.terrain.carve(64, 0);
+      const second = f.terrain.carve(64, -4);
+      await Promise.resolve();
+      expect(f.deferred).toHaveLength(2);
+      f.resolveAll();
+      await first;
+      await Promise.resolve();
+      expect(f.deferred).toHaveLength(4);
+      expect(f.deferred[2].vertices[1]).toBe(-4);
+      for (const pending of f.deferred.slice(2)) {
+        const result = pending.vertices.slice();
+        for (let i = 1; i < result.length; i += 3) result[i] = -8;
+        pending.resolve(result);
+      }
+      await second;
+      f.world.step();
+      expect(f.rayY(63)).toBeCloseTo(-8);
+      expect(f.rayY(65)).toBeCloseTo(-8);
+      expect(f.world.colliders.len()).toBe(2);
+    } finally {
+      f.dispose();
+    }
+  });
 });

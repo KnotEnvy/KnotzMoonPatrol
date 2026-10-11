@@ -163,7 +163,12 @@ export class Terrain {
           })),
         );
         if (this.disposed) return;
-        const live = edits.filter(({ chunk }) => this.chunks.get(chunk.id) === chunk);
+        const live = edits.filter(
+          ({ chunk, vertices }) =>
+            this.chunks.get(chunk.id) === chunk &&
+            vertices !== chunk.vertices &&
+            vertices.some((value, i) => value !== chunk.vertices[i]),
+        );
         const replacements: { chunk: Chunk; vertices: Float32Array; collider: RAPIER.Collider }[] =
           [];
         try {
@@ -180,7 +185,7 @@ export class Terrain {
             this.world.removeCollider(replacement.collider, true);
           throw error;
         }
-        // All readbacks finish before any surface changes. Commit the mesh/collider
+        // All brush jobs finish before any surface changes. Commit the mesh/collider
         // pair for every surviving chunk in one task, retaining GPU vertex buffers.
         for (const { chunk, vertices, collider } of replacements) {
           this.world.removeCollider(chunk.collider, true);

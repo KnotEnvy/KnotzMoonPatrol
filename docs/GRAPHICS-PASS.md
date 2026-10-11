@@ -35,4 +35,4 @@ Volumetric dust/weather, screen-space shadows, GPU particle simulation/200,000-p
 
 The acceptance gates for frame-time tails, complete suspension/full-run balance, cold terrain carving, input latency, and instrumented UI smoothness remain open. The fresh gameplay capture measured 380.5 ms for the cold GPU brush and 13.5 ms for a subsequent two-chunk brush; one fast warm carve does not establish the two-frame guarantee under combat load.
 
-Changes are prepared locally on `codex/biome-graphics`. Hosted Pages publishing is handled separately through the existing validated `main` workflow.
+The graphics pass was merged in [PR #1](https://github.com/KnotEnvy/KnotzMoonPatrol/pull/1), release commit `2f474c8`. The [Pages deployment and hosted checks](https://github.com/KnotEnvy/KnotzMoonPatrol/actions/runs/38104022586) passed. The merged branch was removed. The subsequent [terrain pass](TERRAIN-PASS.md) addresses small-brush readback latency separately.

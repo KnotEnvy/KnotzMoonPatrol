@@ -1,6 +1,6 @@
 # World-detail team handoff
 
-The previous gameplay/rendering baseline is consolidated on `main`. The October 10 continuation is prepared locally on `codex/biome-graphics`; see [the graphics pass](GRAPHICS-PASS.md). Start with [the original PRD](PRD.md), then [current implementation status](IMPLEMENTATION-STATUS.md). Continue visual/world detail while preserving playable systems and measuring graphics costs.
+The gameplay/rendering and October 10 graphics release are consolidated on `main`, with successful Pages deployment and hosted checks. See [the graphics pass](GRAPHICS-PASS.md) and subsequent [terrain latency pass](TERRAIN-PASS.md). Start with [the original PRD](PRD.md), then [current implementation status](IMPLEMENTATION-STATUS.md). Continue visual/world detail while preserving playable systems and measuring graphics costs.
 
 ## Start here
 
@@ -24,6 +24,7 @@ npm run test:browser
 npm run test:streaming
 npm run test:hazards
 npm run test:graphics
+npm run test:terrain -- world-detail
 npm run test:performance -- world-detail
 ```
 
