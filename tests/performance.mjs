@@ -6,7 +6,9 @@ import os from 'node:os';
 // Controlled render comparison, not the full PRD acceptance workload.
 await fs.mkdir('test-results', { recursive: true });
 const label = process.argv[2] ?? 'current';
+const quality = process.argv[3] ?? 'balanced';
 assert(/^[a-z0-9-]+$/i.test(label), 'Use a simple filename label');
+assert(['performance', 'balanced', 'cinematic'].includes(quality), 'Use a valid graphics preset');
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const results = [];
 try {
@@ -17,7 +19,10 @@ try {
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
-    await page.goto('http://127.0.0.1:5173/' + (mode === 'webgl' ? '?renderer=webgl' : ''));
+    const url = new URL('http://127.0.0.1:5173/');
+    url.searchParams.set('quality', quality);
+    if (mode === 'webgl') url.searchParams.set('renderer', 'webgl');
+    await page.goto(url.href);
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .click({ timeout: 60000 });
@@ -106,6 +111,8 @@ try {
       const info = adapter?.info;
       return {
         backend: g.state.backend,
+        quality: g.state.quality,
+        bloom: g.graphics?.bloomEnabled,
         adapter: info
           ? {
               vendor: info.vendor,
@@ -127,6 +134,7 @@ try {
       };
     });
     assert.equal(metrics.backend, mode === 'webgpu' ? 'WEBGPU' : 'WEBGL 2');
+    assert.equal(metrics.quality, quality);
     assert(metrics.activeShots.min >= 100, 'Stress fixture lost projectile occupancy');
     assert(metrics.activeParticles.min >= 600, 'Stress fixture lost debris occupancy');
     assert.deepEqual(errors, []);

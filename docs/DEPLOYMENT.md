@@ -18,7 +18,7 @@ npm run build:pages
 npm run test:pages
 ```
 
-The last command starts and stops its own production-preview server on port 4173. It checks the repository subpath, favicon and bundled assets, absence of developer controls, launch/movement/fire, pause/resume, and the mobile layout. It runs the normal renderer selection and forced WebGL fallback. On Windows it uses installed Edge; on Linux it uses Playwright Chromium.
+The last command starts and stops its own production-preview server on port 4173. It checks the repository subpath, favicon and bundled assets, absence of developer controls, all three graphics presets, launch/movement/fire, pause/resume, and the mobile layout. It runs the normal renderer selection and forced WebGL fallback. On Windows it uses installed Edge; on Linux it uses Playwright Chromium.
 
 For manual inspection:
 

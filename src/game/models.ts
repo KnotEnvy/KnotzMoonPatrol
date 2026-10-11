@@ -198,6 +198,20 @@ export function makeBackdrop(scene: T.Scene) {
   for (let layer = 0; layer < 3; layer++) group.add(makeRidge(layer));
   return { group, planet, mountainMaterial };
 }
+export function disposeMaterial(material: T.Material) {
+  const m = material as T.MeshStandardMaterial;
+  new Set([
+    m.map,
+    m.bumpMap,
+    m.normalMap,
+    m.emissiveMap,
+    m.roughnessMap,
+    m.metalnessMap,
+    m.aoMap,
+    m.alphaMap,
+  ]).forEach((texture) => texture?.dispose());
+  material.dispose();
+}
 export function disposeGroup(group: T.Object3D, retainedMaterials?: Set<T.Material>) {
   const geometries = new Set<T.BufferGeometry>(),
     materials = new Set<T.Material>();
@@ -211,9 +225,7 @@ export function disposeGroup(group: T.Object3D, retainedMaterials?: Set<T.Materi
   geometries.forEach((g) => g.dispose());
   materials.forEach((m) => {
     if (retainedMaterials?.has(m)) return;
-    const map = (m as T.MeshStandardMaterial).map;
-    map?.dispose();
-    m.dispose();
+    disposeMaterial(m);
   });
   group.removeFromParent();
 }
@@ -254,47 +266,4 @@ export function makeRidge(layer: number) {
       flatShading: true,
     }),
   );
-}
-let lunarBaseTexture: T.CanvasTexture | undefined;
-export function lunarTexture() {
-  if (lunarBaseTexture) {
-    const texture = new T.CanvasTexture(lunarBaseTexture.image);
-    texture.wrapS = texture.wrapT = T.RepeatWrapping;
-    texture.colorSpace = T.SRGBColorSpace;
-    texture.anisotropy = 4;
-    return texture;
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 512;
-  const c = canvas.getContext('2d')!;
-  c.fillStyle = '#b4b7b6';
-  c.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 18000; i++) {
-    const x = randomAt(i * 3 + 10) * 512,
-      y = randomAt(i * 3 + 20) * 512,
-      r = 0.3 + randomAt(i * 3 + 30) * 3;
-    const grey = 95 + Math.floor(randomAt(i + 5) * 135);
-    c.fillStyle = 'rgba(' + grey + ',' + grey + ',' + grey + ',.25)';
-    c.beginPath();
-    c.ellipse(x, y, r * 2, r, 0.6, 0, 7);
-    c.fill();
-  }
-  for (let i = 0; i < 35; i++) {
-    const x = randomAt(i + 90) * 512,
-      y = randomAt(i + 290) * 512,
-      r = 3 + randomAt(i + 30) * 18;
-    const grad = c.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, '#4448');
-    grad.addColorStop(0.6, '#7775');
-    grad.addColorStop(0.85, '#ddd4');
-    grad.addColorStop(1, '#aaa0');
-    c.fillStyle = grad;
-    c.fillRect(x - r, y - r, r * 2, r * 2);
-  }
-  const texture = new T.CanvasTexture(canvas);
-  texture.wrapS = texture.wrapT = T.RepeatWrapping;
-  texture.colorSpace = T.SRGBColorSpace;
-  texture.anisotropy = 4;
-  lunarBaseTexture = texture;
-  return texture.clone();
 }

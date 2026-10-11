@@ -1,6 +1,9 @@
 import * as T from 'three/webgpu';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Sound } from './audio';
+import { Graphics } from './graphics';
+import { BiomeLighting } from './lighting';
+import { loadGraphicsQuality, type GraphicsQuality } from './quality';
 import { Hazards, type HazardEffects } from './hazards';
 import { EncounterDirector, nextGap } from './route';
 import { JumpAssist, landingQuality, terrainPitch } from './movement';
@@ -83,6 +86,9 @@ export class Game {
   private scene = new T.Scene();
   private camera = new T.PerspectiveCamera(45, 1, 0.1, 550);
   private renderer!: T.WebGPURenderer;
+  private graphics!: Graphics;
+  private lighting!: BiomeLighting;
+  private biomeSkies = BIOMES.map((b) => new T.Color(b.sky));
   private world!: RAPIER.World;
   private body!: RAPIER.RigidBody;
   private vehicle!: RAPIER.DynamicRayCastVehicleController;
@@ -156,6 +162,7 @@ export class Game {
       best = Number(localStorage.getItem('void-runner-best')) || 0;
     } catch {}
     this.state = initialTelemetry(best);
+    this.state.quality = loadGraphicsQuality();
   }
   async init() {
     try {
@@ -167,7 +174,7 @@ export class Game {
         powerPreference: 'high-performance',
         forceWebGL: new URLSearchParams(location.search).get('renderer') === 'webgl',
       });
-      this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+      this.renderer.info.autoReset = false;
       this.renderer.shadowMap.enabled = true;
       this.renderer.toneMapping = T.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 1.12;
@@ -192,7 +199,7 @@ export class Game {
       this.renderer.domElement.setAttribute('aria-label', 'Moon Patrol lunar landscape and rover');
       this.scene.background = new T.Color(BIOMES[0].sky);
       this.scene.fog = new T.FogExp2(BIOMES[0].sky, 0.0022);
-      this.scene.add(new T.HemisphereLight('#b5d9ec', '#1a2938', 1.8));
+      this.lighting = new BiomeLighting(this.scene, this.light);
       this.light.position.set(-25, 55, 22);
       this.light.castShadow = true;
       this.light.shadow.mapSize.set(1024, 1024);
@@ -207,6 +214,8 @@ export class Game {
       this.light.shadow.bias = -0.001;
       this.scene.add(this.light, this.light.target);
       this.backdrop = makeBackdrop(this.scene);
+      this.graphics = new Graphics(this.renderer, this.scene, this.camera);
+      this.graphics.setQuality(this.state.quality);
       this.scene.add(this.rover.group);
       this.world = new RAPIER.World({ x: 0, y: -17, z: 0 });
       this.world.timestep = FIXED_DT;
@@ -320,6 +329,16 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
   }
+  setQuality(quality: GraphicsQuality) {
+    if (!this.ready || quality === this.state.quality) return;
+    this.graphics.setQuality(quality);
+    this.resize();
+    this.state.quality = quality;
+    try {
+      localStorage.setItem('void-runner-graphics', quality);
+    } catch {}
+    this.emit();
+  }
   private keyDown = (e: KeyboardEvent) => {
     if (
       this.overlayOpen ||
@@ -389,6 +408,7 @@ export class Game {
       ...initialTelemetry(this.state.best),
       phase: 'playing',
       backend: this.state.backend,
+      quality: this.state.quality,
       fps: this.state.fps,
     };
     this.body.setTranslation({ x: 0, y: 2, z: 0 }, true);
@@ -469,10 +489,11 @@ export class Game {
   }
   private tick = (now: number) => {
     if (this.disposed) return;
-    const dt = Math.min(0.1, (now - (this.last || now)) / 1000);
+    const frameDt = (now - (this.last || now)) / 1000;
+    const dt = Math.min(0.1, frameDt);
     this.last = now;
     this.fpsFrames++;
-    this.fpsTime += dt;
+    this.fpsTime += frameDt;
     if (this.fpsTime > 0.7) {
       this.state.fps = Math.round(this.fpsFrames / this.fpsTime);
       this.fpsFrames = 0;
@@ -502,7 +523,10 @@ export class Game {
       this.uiTime = 0;
       this.emit();
     }
-    this.renderer.render(this.scene, this.camera);
+    this.graphics.render(
+      this.state.phase === 'playing' && input.boost && this.state.capacitor > 0,
+      this.trauma,
+    );
     this.frame = requestAnimationFrame(this.tick);
   };
   private step(input: Input) {
@@ -1051,20 +1075,24 @@ export class Game {
     this.rover.turret.rotation.z = target
       ? -clamp(Math.atan2(target.x - p.x, target.y - p.y), -0.75, 0.75)
       : 0;
-    const fov = menu ? 45 : boost ? 60 : 48;
+    const fov = menu ? 45 : boost ? 65 : 48;
     this.camera.fov = T.MathUtils.lerp(this.camera.fov, fov, 1 - Math.exp(-dt * 3));
     this.camera.updateProjectionMatrix();
     const narrow = this.camera.aspect < 1;
     const distance = (menu ? 32 : 34) * (narrow ? Math.min(2.2, 1 / this.camera.aspect) : 1);
     const targetPos = new T.Vector3(
-      p.x + (narrow ? 5 : menu ? 7 : 12),
+      p.x + (narrow ? (boost ? 9 : 5) : menu ? 7 : boost ? 20 : 12),
       menu ? 8.8 : 10.2,
       distance,
     );
     this.camera.position.lerp(targetPos, 1 - Math.exp(-dt * 5));
     this.trauma = Math.max(0, this.trauma - dt * 2);
     this.camera.position.y += Math.sin(this.elapsed * 75) * this.trauma * 0.15;
-    this.camera.lookAt(p.x + (narrow ? (menu ? 2 : 6) : menu ? 9 : 14), 3.6, 0);
+    this.camera.lookAt(
+      p.x + (narrow ? (menu ? 2 : boost ? 11 : 6) : menu ? 9 : boost ? 22 : 14),
+      3.6,
+      0,
+    );
     this.camera.updateMatrixWorld();
     const threats = this.hazards.threats(p.x);
     const gap = nextGap(p.x);
@@ -1118,9 +1146,12 @@ export class Game {
     this.backdrop.group.position.x = p.x * 0.98;
     this.light.position.x = p.x - 25;
     this.light.target.position.x = p.x + 10;
-    const biome = BIOMES[this.state.biome];
-    (this.scene.background as T.Color).lerp(new T.Color(biome.sky), dt * 2);
+    (this.scene.background as T.Color).lerp(
+      this.biomeSkies[this.state.biome],
+      1 - Math.exp(-dt * 2),
+    );
     (this.scene.fog as T.FogExp2).color.copy(this.scene.background as T.Color);
+    this.lighting.update(this.state.biome, p, dt);
     for (let team = 0; team < 2; team++) {
       updateInstanceBatch(
         this.shotBatches[team],
@@ -1165,6 +1196,9 @@ export class Game {
       this.hazards.dispose();
       this.terrain.dispose();
       this.world.free();
+      this.graphics.dispose();
+      this.lighting.dispose();
+      this.light.dispose();
       disposeGroup(this.scene);
       this.compute.dispose();
       this.renderer.dispose();

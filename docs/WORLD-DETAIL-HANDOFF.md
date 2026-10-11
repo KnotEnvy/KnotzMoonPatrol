@@ -1,6 +1,6 @@
 # World-detail team handoff
 
-The completed gameplay and rendering work is consolidated on `main`. Start with [the original PRD](PRD.md), then [current implementation status](IMPLEMENTATION-STATUS.md). The next team's focus is visual/world detail while preserving the playable systems.
+The previous gameplay/rendering baseline is consolidated on `main`. The October 10 continuation is prepared locally on `codex/biome-graphics`; see [the graphics pass](GRAPHICS-PASS.md). Start with [the original PRD](PRD.md), then [current implementation status](IMPLEMENTATION-STATUS.md). Continue visual/world detail while preserving playable systems and measuring graphics costs.
 
 ## Start here
 
@@ -23,6 +23,7 @@ See [deployment](DEPLOYMENT.md) for Pages and [performance](PERFORMANCE.md) for 
 npm run test:browser
 npm run test:streaming
 npm run test:hazards
+npm run test:graphics
 npm run test:performance -- world-detail
 ```
 
@@ -38,21 +39,24 @@ X moves forward along the run, Y is up, Z is scene depth. The rover is constrain
 | Bioluminescent Chasm | P–T     | 3300–4400 | Glowing vegetation/spores, fungal shapes, acid depth, stronger headlight contrast |
 | Orbital Citadel      | U–Z     | 4400–5720 | Alloy track detail, megastructures, field generators, barrier/sentry silhouettes  |
 
-The current backgrounds, surface textures, rover, and enemies are procedural placeholders. There is no external world-asset library to preserve.
+The five surface sets and shared lighting/headlights now distinguish the biomes. Background, rover, enemy, and flora/structure geometry remain provisional procedural art. There is no external world-asset library to preserve.
 
 ## Editing entry points
 
-| File/function                                                      | Responsibility                                                                       |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `src/game/rules.ts` / `BIOMES`                                     | Palette, labels, gravity; `baseHeight` defines the playable ground                   |
-| `src/game/models.ts` / `makeBackdrop`, `makeRidge`, `lunarTexture` | Planet, skyline, ridge geometry and current surface appearance                       |
-| `src/game/terrain.ts` / `add`                                      | Streamed surface, chunk-owned scenery, material retention, terrain colliders         |
-| `src/game/hazards.ts` / `add`                                      | Visuals for plates, vents, crystal/laser emitters, fungal covers, low-gravity fields |
-| `src/game/route.ts`                                                | Authored encounters and hazard positions; gap layout contract                        |
-| `src/game/models.ts` / `makeRover`, `makeEnemy`                    | Vehicle and threat art, with animated pivots retained                                |
-| `src/game/engine.ts` / `render`                                    | Lighting, camera, backdrop follow, warning projection, visual-effect updates         |
-| `src/game/render-batches.ts`                                       | Static owned-geometry batching and bounded dynamic instance packing                  |
-| `src/App.tsx`, `src/style.css`                                     | HUD/menus, protected play area and readable threat markers                           |
+| File/function                                      | Responsibility                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `src/game/rules.ts` / `BIOMES`                     | Palette, labels, gravity; `baseHeight` defines the playable ground                   |
+| `src/game/models.ts` / `makeBackdrop`, `makeRidge` | Planet, skyline, and ridge geometry                                                  |
+| `src/game/surfaces.ts` / `biomeSurface`            | Five cached CPU image sets and terrain-owned GPU surface maps                        |
+| `src/game/lighting.ts` / `BiomeLighting`           | Shared blended lighting, headlight, and distance fog                                 |
+| `src/game/graphics.ts`, `src/game/quality.ts`      | Preset budgets and optional HDR bloom/lens graph                                     |
+| `src/game/terrain.ts` / `add`                      | Streamed surface, chunk-owned scenery, material retention, terrain colliders         |
+| `src/game/hazards.ts` / `add`                      | Visuals for plates, vents, crystal/laser emitters, fungal covers, low-gravity fields |
+| `src/game/route.ts`                                | Authored encounters and hazard positions; gap layout contract                        |
+| `src/game/models.ts` / `makeRover`, `makeEnemy`    | Vehicle and threat art, with animated pivots retained                                |
+| `src/game/engine.ts` / `render`                    | Lighting, camera, backdrop follow, warning projection, visual-effect updates         |
+| `src/game/render-batches.ts`                       | Static owned-geometry batching and bounded dynamic instance packing                  |
+| `src/App.tsx`, `src/style.css`                     | HUD/menus, protected play area and readable threat markers                           |
 
 ## Working boundaries
 
@@ -65,6 +69,8 @@ Keep the mutable surface separate from decorative batches. Keep wheel/suspension
 `batchStaticMeshes` disposes source geometries and requires exclusive ownership. Imported GLTF geometry/materials may be shared: clone owned geometry before batching, or use instances. Retain shared materials/textures until their final owner is disposed; unloading one chunk must not invalidate another chunk's resources.
 
 Prefer shared materials and instanced repeated props. Avoid adding one material/light/shadow caster per small decorative item. Measure changes against the existing stress fixture rather than assuming a sparse menu scene represents combat.
+
+Compare Balanced first, then opt into Cinematic. Keep effects outside the HTML HUD. Preserve disposal of all surface maps and optional render targets. Keep the chasm vehicle/edges readable when adjusting night lighting.
 
 ## Asset paths and review
 

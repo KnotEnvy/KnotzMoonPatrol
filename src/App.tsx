@@ -15,6 +15,7 @@ import {
   Radio,
   RotateCcw,
   Shield,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
   X,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Game, type Loadout } from './game/engine';
 import { BIOMES, initialTelemetry, SECTOR_LENGTH, type Weapon, type SkyWeapon } from './game/rules';
+import { GRAPHICS_PRESETS, type GraphicsQuality } from './game/quality';
 const groundWeapons = [
   { id: 'pulse', name: 'Pulse Vulcan', detail: 'Rapid plasma · balanced heat' },
   { id: 'beam', name: 'Resonance Beam', detail: 'Sustained energy · high heat' },
@@ -59,6 +61,7 @@ export default function App() {
     [error, setError] = useState(''),
     [help, setHelp] = useState(false),
     [hangar, setHangar] = useState(false),
+    [graphics, setGraphics] = useState(false),
     [muted, setMuted] = useState(false);
   const [ground, setGround] = useState<Weapon>('pulse'),
     [sky, setSky] = useState<SkyWeapon>('flak');
@@ -85,18 +88,19 @@ export default function App() {
   }, []);
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
-      if (e.code === 'Escape' && (help || hangar)) {
+      if (e.code === 'Escape' && (help || hangar || graphics)) {
         e.stopImmediatePropagation();
         setHelp(false);
         setHangar(false);
+        setGraphics(false);
       }
     };
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
-  }, [help, hangar]);
+  }, [help, hangar, graphics]);
   useEffect(() => {
-    if (game.current) game.current.overlayOpen = help || hangar;
-  }, [help, hangar]);
+    if (game.current) game.current.overlayOpen = help || hangar || graphics;
+  }, [help, hangar, graphics]);
   const start = () => {
     game.current?.start({ ground, sky } as Loadout);
     (document.activeElement as HTMLElement)?.blur();
@@ -107,7 +111,15 @@ export default function App() {
   };
   const openHelp = () => {
     if (playing) game.current?.pause();
+    setGraphics(false);
+    setHangar(false);
     setHelp(true);
+  };
+  const openGraphics = () => {
+    if (playing) game.current?.pause();
+    setHelp(false);
+    setHangar(false);
+    setGraphics(true);
   };
   const full = async () => {
     try {
@@ -152,6 +164,15 @@ export default function App() {
             <span className={'status-dot ' + (ready ? '' : 'loading')} />
             {ready ? s.backend : 'BOOTING'}
           </span>
+          <button
+            className="icon-button"
+            onClick={openGraphics}
+            aria-label="Graphics settings"
+            title="Graphics settings"
+            disabled={!ready}
+          >
+            <SlidersHorizontal size={17} />
+          </button>
           <button
             className="icon-button"
             onClick={toggleAudio}
@@ -507,7 +528,7 @@ export default function App() {
       )}
       {s.hull < 30 && playing && <div className="damage-vignette" />}
       <AnimatePresence>
-        {s.phase === 'paused' && !help && (
+        {s.phase === 'paused' && !help && !graphics && (
           <Modal title="A moment of silence." eyebrow="EXPEDITION PAUSED" key="paused">
             <p className="modal-intro">Your rover is holding position. The void can wait.</p>
             <button className="launch-button" onClick={() => game.current?.pause()}>
@@ -520,7 +541,7 @@ export default function App() {
             </div>
           </Modal>
         )}
-        {s.phase === 'report' && (
+        {s.phase === 'report' && !help && !graphics && (
           <Modal
             title="Checkpoint secured."
             eyebrow={'SECTOR ' + String.fromCharCode(64 + s.sector) + ' / EXPEDITION REPORT'}
@@ -546,7 +567,7 @@ export default function App() {
             </button>
           </Modal>
         )}
-        {(s.phase === 'dead' || s.phase === 'complete') && (
+        {(s.phase === 'dead' || s.phase === 'complete') && !help && !graphics && (
           <Modal
             title={s.phase === 'dead' ? 'Signal lost.' : 'Beyond the void.'}
             eyebrow={s.phase === 'dead' ? 'ROVER TELEMETRY OFFLINE' : 'EXPEDITION COMPLETE / A—Z'}
@@ -573,6 +594,48 @@ export default function App() {
             </button>
             <button className="return-button" onClick={() => game.current?.menu()}>
               RETURN TO BASE
+            </button>
+          </Modal>
+        )}
+        {graphics && (
+          <Modal
+            title="Find your balance."
+            eyebrow="DISPLAY / GRAPHICS"
+            close={() => setGraphics(false)}
+            key="graphics"
+          >
+            <p className="modal-intro">
+              Choose the detail level that keeps your expedition flowing. Balanced is the starting
+              point.
+            </p>
+            <div className="graphics-picker" role="group" aria-label="Graphics quality">
+              {(Object.keys(GRAPHICS_PRESETS) as GraphicsQuality[]).map((quality) => (
+                <button
+                  key={quality}
+                  className={s.quality === quality ? 'selected' : ''}
+                  aria-pressed={s.quality === quality}
+                  onClick={() => game.current?.setQuality(quality)}
+                >
+                  <b>{GRAPHICS_PRESETS[quality].label}</b>
+                  <span>
+                    {s.backend === 'WEBGL 2' && quality !== 'performance'
+                      ? quality === 'cinematic'
+                        ? 'Sharper surfaces · higher resolution'
+                        : 'Detailed surfaces · standard resolution'
+                      : GRAPHICS_PRESETS[quality].detail}
+                  </span>
+                  {s.quality === quality && <small>ACTIVE</small>}
+                </button>
+              ))}
+            </div>
+            <p className="service-note">
+              {s.backend === 'WEBGL 2'
+                ? 'Dynamic shadows and cinematic glow require WebGPU. Surface detail and headlights remain available.'
+                : 'Cinematic adds bloom and a subtle lens effect during boosts and impacts.'}
+            </p>
+            <button className="launch-button" onClick={() => setGraphics(false)}>
+              <span>DONE</span>
+              <ArrowRight size={18} />
             </button>
           </Modal>
         )}

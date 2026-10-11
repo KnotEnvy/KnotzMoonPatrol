@@ -29,6 +29,7 @@ Browser checks require Microsoft Edge installed and the development server alrea
 npm run test:browser
 npm run test:streaming
 npm run test:hazards
+npm run test:graphics
 npm run test:performance -- current
 ```
 
@@ -63,6 +64,18 @@ Touch controls appear on narrow/coarse-pointer screens.
 Standard gamepad: left stick speed/pitch, A jump, X fire, B vent, bumpers brake/boost, Start pause.
 Gamepad mappings and vibration need physical-device validation.
 
+## Graphics
+
+Use the sliders button in the header to choose Performance, Balanced, or Cinematic. Balanced is the default. All presets keep biome surface detail and rover headlights; Cinematic adds WebGPU bloom and boost/impact lens effects. The choice is saved locally. Settings pause active play.
+
+For repeatable comparisons, use `?quality=performance`, `?quality=balanced`, or `?quality=cinematic`. WebGL uses the resolution presets with surface/lighting detail; dynamic shadows and cinematic effects require WebGPU.
+
+```powershell
+npm run test:performance -- my-capture balanced
+```
+
+See [the graphics pass](docs/GRAPHICS-PASS.md) and [measurements](docs/PERFORMANCE.md) for capabilities and open acceptance work.
+
 ## What is playable
 
 - Distance-authored A–Z route through five biome palettes and scenery sets; reports after E/J/O/T and a sector-Z mothership.
@@ -73,6 +86,7 @@ Gamepad mappings and vibration need physical-device validation.
 - React/Framer Motion HUD, reports, route progress, loadout menu, pause, retry, victory, and persistent best score.
 - Procedural Web Audio engine hum, rhythmic bass/percussion, boost arpeggios, weapon/impact cues, stereo panning.
 - Static rover, enemy, and scenery geometry batches; two projectile instance batches and active-only debris draws.
+- Five distinct PBR surface sets, blended biome lighting, rover headlights, and optional cinematic bloom/lens effects.
 - Locally bundled fonts and procedurally generated scenery; no external asset requests are required at runtime.
 - Contact-triggered collapsing bridges, erupting magma vents, destructible laser emitters, concealed acid gaps, and low-gravity fields.
 - World-projected hazard/aircraft/strike scanner, buffered jumps, and slope-matched momentum rewards.
@@ -89,6 +103,8 @@ See [the October gameplay pass](docs/GAMEPLAY-PASS.md) for behavior and evidence
 | `src/game/rules.ts`                                                | Pure energy/scoring/progression rules and biome definitions                  |
 | `src/game/models.ts`                                               | Procedural rover, enemies, planet, mountains, surface textures               |
 | `src/game/render-batches.ts`                                       | Static geometry batching and dynamic instance packing                        |
+| `src/game/graphics.ts`, `src/game/quality.ts`                      | Graphics presets, optional HDR graph, and effect resource ownership          |
+| `src/game/surfaces.ts`, `src/game/lighting.ts`                     | Biome surface maps and shared biome/headlight rig                            |
 | `src/game/route.ts`, `src/game/hazards.ts`, `src/game/movement.ts` | Authored encounters, physical biome hazards, buffered jumps, landing rewards |
 | `src/game/audio.ts`                                                | Procedural soundtrack and feedback                                           |
 | `src/App.tsx`, `src/style.css`                                     | Interface, input hints, loadout dialogs, responsive HUD                      |

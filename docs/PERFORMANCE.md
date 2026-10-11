@@ -45,3 +45,28 @@ Draw calls fell 78.3% on WebGPU and 79.3% on WebGL. The first batched WebGPU cap
 Local artifacts: `test-results/performance-baseline.json`, `performance-batched.json`, and `performance-batched-repeat.json`, plus corresponding screenshots. These are ignored outputs; the summary above is retained in the repository. The screenshot is captured while gameplay is active; the original baseline screenshot includes the pause overlay, but its timings were collected before pausing.
 
 Production build, 11 unit tests, gameplay smoke, and WebGPU/WebGL all-biome streaming passed. No stable 60 FPS acceptance claim is made from this comparison. The remaining gates are tracked in [implementation status](IMPLEMENTATION-STATUS.md).
+
+## October 10 graphics preset captures
+
+Source baseline: `4bb17a3`; new graphics work is on `codex/biome-graphics`. Headless Edge 155.0.4283.45, Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz, 31.8 GB RAM, Windows 10.0.19045; independently requested WebGPU adapter: NVIDIA/Turing. Preset captures ran serially after build/browser regressions finished.
+
+Each uses the unchanged fixed-arena geometry with 100 projectiles, 600 CPU debris, 90 warmup frames, and 240 sampled frames. All occupancy/error assertions pass. The viewport is 1920 x 1080; actual canvas is 1920 x 976 at device ratio 1. The fixture exercises default/cruise framing, not the changed boost camera.
+
+| Capture     | Backend | Draw calls/frame | Median ms | p95 ms | Mean ms |
+| ----------- | ------- | ---------------: | --------: | -----: | ------: |
+| baseline    | WEBGPU  |               78 |      16.8 |   83.6 |    40.7 |
+| baseline    | WEBGL 2 |               52 |      16.7 |   66.8 |    23.0 |
+| balanced    | WEBGPU  |               78 |      16.7 |   66.6 |    22.8 |
+| balanced    | WEBGL 2 |               52 |      16.7 |   33.3 |    17.8 |
+| performance | WEBGPU  |               52 |      16.7 |   16.9 |    17.7 |
+| performance | WEBGL 2 |               52 |      16.7 |   50.1 |    22.5 |
+| cinematic   | WEBGPU  |               90 |      16.7 |   83.5 |    39.0 |
+| cinematic   | WEBGL 2 |               52 |      33.0 |  116.7 |    49.7 |
+
+Balanced retains the original draw counts while adding separate biome maps and the shared headlight. Performance removes native shadow passes. Cinematic counts the complete scene/HDR/bloom/composite chain with manual once-per-frame reset. At high device density, preset pixel caps are 1 / 1.25 / 1.75; native WebGPU menu scenarios at device ratio 2 also verify those caps.
+
+Timing remains variable. WebGL has no bloom or shadows and the same canvas size/draw counts for all presets at device ratio 1, yet its Cinematic-labelled capture was slower; this is evidence of capture/host variability, not evidence that disabled bloom costs time. No preset establishes sustained 60 FPS or native 1080p PRD acceptance. The Performance WebGPU capture still had an 83.5 ms maximum frame despite a 16.9 ms p95.
+
+Reproduce with `npm run test:performance -- label balanced` (or `performance` / `cinematic`). The URL quality override prevents stored preferences from changing a capture. JSON/raw-frame/screenshot files use `test-results/performance-october-*.json` and related image names.
+
+See [graphics evidence](GRAPHICS-PASS.md) for ownership, preset switching, visuals, and production checks.
