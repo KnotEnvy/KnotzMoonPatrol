@@ -79,7 +79,9 @@ export default function App() {
       setError,
     );
     game.current = engine;
-    if (import.meta.env.DEV) (window as unknown as { __voidRunner: Game }).__voidRunner = engine;
+    // Only the separate local benchmark build retains instrumentation; Pages never does.
+    if (import.meta.env.DEV || import.meta.env.MODE === 'benchmark')
+      (window as unknown as { __voidRunner: Game }).__voidRunner = engine;
     void engine.init();
     return () => {
       engine.dispose();
@@ -203,14 +205,14 @@ export default function App() {
           </button>
         </div>
       </header>
-      <AnimatePresence mode="wait">
+      <AnimatePresence initial={false}>
         {menu ? (
           <motion.section
             key="menu"
             className="mission-screen"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            exit={{ opacity: 0, transition: { duration: 0 } }}
             transition={{ duration: 0.35 }}
           >
             <div className="hero-copy">
@@ -322,7 +324,7 @@ export default function App() {
           <motion.section
             key="hud"
             className="hud"
-            initial={{ opacity: 0 }}
+            initial={false}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
@@ -620,7 +622,22 @@ export default function App() {
               <Stat label="TARGETS DESTROYED" value={String(s.kills)} />
               <Stat label="PERSONAL BEST" value={fmt(s.best)} />
             </div>
-            <button className="launch-button" onClick={start}>
+            {s.phase === 'dead' && s.checkpoint > 0 && (
+              <>
+                <button className="launch-button" onClick={() => game.current?.retryCheckpoint()}>
+                  <span>RECOVER AT CHECKPOINT {String.fromCharCode(64 + s.checkpoint)}</span>
+                  <RotateCcw size={18} />
+                </button>
+                <p className="service-note">
+                  RESTART THIS LEG WITH FULL HULL AND ENERGY. SCORE AND PROGRESS RETURN TO YOUR
+                  CHECKPOINT.
+                </p>
+              </>
+            )}
+            <button
+              className={s.phase === 'dead' && s.checkpoint > 0 ? 'return-button' : 'launch-button'}
+              onClick={start}
+            >
               <span>RUN IT AGAIN</span>
               <RotateCcw size={18} />
             </button>
@@ -704,6 +721,10 @@ export default function App() {
             <p className="service-note">
               RESONANCE: HOLD FIRE TO MELT ROCKS. TACHYON: HOLD FIRE TO CHARGE, RELEASE TO SHOOT.
               BUILD AT LEAST A QUARTER CHARGE. VENTING OR PAUSING CANCELS THE CHARGE.
+            </p>
+            <p className="service-note">
+              PATROL CLEARANCE: JUMP ROCKS +100 · MINES +150 · SKIMMERS +200 · CHASMS +50. LAND
+              WITHOUT DAMAGE TO BANK YOUR BONUS. CLEAN LANDINGS ADD +250.
             </p>
             <button className="launch-button" onClick={() => setHelp(false)}>
               <span>UNDERSTOOD</span>

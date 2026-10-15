@@ -41,7 +41,7 @@ X moves forward along the run, Y is up, Z is scene depth. The rover is constrain
 | Bioluminescent Chasm | P–T     | 3300–4400 | Glowing vegetation/spores, fungal shapes, acid depth, stronger headlight contrast |
 | Orbital Citadel      | U–Z     | 4400–5720 | Alloy track detail, megastructures, field generators, barrier/sentry silhouettes  |
 
-The five surface sets and shared lighting/headlights now distinguish the biomes. Background, rover, enemy, and flora/structure geometry remain provisional procedural art. There is no external world-asset library to preserve.
+The five surface sets and shared lighting/headlights distinguish the biomes. The [October 13 classic patrol pass](CLASSIC-PATROL-PASS.md) adds distinct threat silhouettes, articulated rover detail, three independent parallax depths, clustered crystals, fungal scenery, and powered citadel pylons. These remain procedural assets; broader authored art and landmarks remain open. There is no external world-asset library to preserve.
 
 ## Editing entry points
 
@@ -62,7 +62,7 @@ The five surface sets and shared lighting/headlights now distinguish the biomes.
 
 ## Working boundaries
 
-Decorative terrain currently streams about 90 units behind and 200 ahead. Add scenery to the owning chunk group so it unloads with that chunk; keep world positions in the same coordinate space. Keep the driving lane and warnings clear.
+Deformable terrain and enabled colliders stream about 90 units behind and 200 ahead. The [beta performance pass](BETA-BALANCE-PERFORMANCE.md) prepares all 95 original terrain colliders during loading, disabling distant ones instead of reconstructing them during play. Add static scenery to its owning chunk during construction; preparation merges decorations into 256-meter regions with matching materials and shadow flags. These regions stream separately from the 64-meter deformable surfaces. Keep world positions in the same coordinate space and the driving lane and warnings clear. Restart restores cached geometry and original colliders; disposal releases both original and deformed colliders.
 
 The playable surface and its Rapier collider must change together. Do not replace `baseHeight` purely for appearance without updating the authored gap/hazard layout and physics tests. Bridge support, crater brushes, and gameplay probes depend on that contract.
 
@@ -70,7 +70,7 @@ Keep the mutable surface separate from decorative batches. Keep wheel/suspension
 
 `batchStaticMeshes` disposes source geometries and requires exclusive ownership. Imported GLTF geometry/materials may be shared: clone owned geometry before batching, or use instances. Retain shared materials/textures until their final owner is disposed; unloading one chunk must not invalidate another chunk's resources.
 
-Prefer shared materials and instanced repeated props. Avoid adding one material/light/shadow caster per small decorative item. Measure changes against the existing stress fixture rather than assuming a sparse menu scene represents combat.
+Prefer shared materials and instanced repeated props. Avoid adding one material/light/shadow caster per small decorative item. Enemy models are leased from `EnemyModels`; return them to that owner rather than disposing pooled geometry directly. Measure world changes with the production benchmark's continuous-route and native-1080p stress fixtures, with the live preview closed. `npm run test:frame-floor` is the strict full-route 40 FPS check: a single frame over 25 ms fails. Short stress tests and profiling modes cannot clear that gate.
 
 Compare Balanced first, then opt into Cinematic. Keep effects outside the HTML HUD. Preserve disposal of all surface maps and optional render targets. Keep the chasm vehicle/edges readable when adjusting night lighting.
 

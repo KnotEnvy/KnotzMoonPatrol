@@ -5,6 +5,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [react()],
   base: mode === 'pages' ? '/KnotzMoonPatrol/' : '/',
   build: {
+    outDir: mode === 'benchmark' ? 'benchmark-dist' : 'dist',
     target: 'es2022',
     rollupOptions: {
       output: { manualChunks: { three: ['three/webgpu'], physics: ['@dimforge/rapier3d-compat'] } },
