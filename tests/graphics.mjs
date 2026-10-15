@@ -25,7 +25,9 @@ try {
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
-    await page.goto('http://127.0.0.1:5173/' + (mode === 'webgl' ? '?renderer=webgl' : ''), {
+    const url = new URL(process.env.GAME_URL ?? 'http://127.0.0.1:5173/');
+    if (mode === 'webgl') url.searchParams.set('renderer', 'webgl');
+    await page.goto(url.href, {
       waitUntil: 'domcontentloaded',
     });
     await page

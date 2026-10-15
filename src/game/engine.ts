@@ -5,8 +5,10 @@ import { Graphics } from './graphics';
 import { BiomeLighting } from './lighting';
 import { loadGraphicsQuality, type GraphicsQuality } from './quality';
 import { Hazards, type HazardEffects } from './hazards';
-import { EncounterDirector, nextGap } from './route';
+import { EncounterDirector, nextGap, safeGroundPosition } from './route';
 import { JumpAssist, landingQuality, terrainPitch } from './movement';
+import { PatrolJump } from './patrol';
+import { EnemyModels } from './enemy-models';
 import { updateInstanceBatch } from './render-batches';
 import { initializePhysics } from './physics';
 import { TerrainCompute } from './terrain-compute';
@@ -19,7 +21,15 @@ import {
   surfaceRayDistance,
 } from './weapons';
 import { WeaponEffects } from './weapon-effects';
-import { makeRover, makeEnemy, makeBackdrop, mat, disposeGroup } from './models';
+import {
+  makeRover,
+  makeBackdrop,
+  mat,
+  disposeGroup,
+  updateSuspension,
+  updateWheelBatches,
+  updateParallax,
+} from './models';
 import {
   type Telemetry,
   type Input,
@@ -107,6 +117,8 @@ export class Game {
   private hazards!: Hazards;
   private director = new EncounterDirector();
   private jumpAssist = new JumpAssist();
+  private patrolJump = new PatrolJump();
+  private enemyModels = new EnemyModels();
   private launched = false;
   private landingBoost = 0;
   private tutorialStage = 0;
@@ -158,6 +170,7 @@ export class Game {
   private trauma = 0;
   private reportMark = { time: 0, kills: 0, clean: 0, damage: 0 };
   private nextReport = 5;
+  private retryPoint?: { state: Telemetry; x: number; nextReport: number };
   private noticeUntil = 0;
   private rearCooldown = 0;
   private padPause = false;
@@ -165,6 +178,14 @@ export class Game {
   private bossSpawned = false;
   private fpsFrames = 0;
   private fpsTime = 0;
+  private strikeGeometry = new T.CylinderGeometry(0.08, 0.08, 40, 6);
+  private strikeMaterial = new T.MeshBasicMaterial({
+    color: '#ff5358',
+    transparent: true,
+    opacity: 0.6,
+  });
+  private initializing = true;
+  private released = false;
   private previous = new T.Vector3();
   private current = new T.Vector3();
   private resizeObserver?: ResizeObserver;
@@ -198,14 +219,11 @@ export class Game {
       await this.renderer.init();
       if (!('isWebGPUBackend' in this.renderer.backend)) this.renderer.shadowMap.enabled = false;
       if (this.disposed) {
-        this.renderer.dispose();
         return;
       }
       if ('device' in this.renderer.backend)
         await this.compute.init(this.renderer.backend.device as GPUDevice);
       if (this.disposed) {
-        this.compute.dispose();
-        this.renderer.dispose();
         return;
       }
       this.state.backend =
@@ -213,6 +231,7 @@ export class Game {
           ? 'WEBGPU'
           : 'WEBGL 2';
       this.host.appendChild(this.renderer.domElement);
+      this.renderer.domElement.style.visibility = 'hidden';
       this.renderer.domElement.setAttribute('aria-label', 'Moon Patrol lunar landscape and rover');
       this.scene.background = new T.Color(BIOMES[0].sky);
       this.scene.fog = new T.FogExp2(BIOMES[0].sky, 0.0022);
@@ -313,12 +332,130 @@ export class Game {
       this.weaponEffects = new WeaponEffects(this.scene);
       for (let i = 0; i < 800; i++)
         this.particles.push({ x: 0, y: -100, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1 });
-      this.seedPreview();
       this.camera.position.set(7, 8.8, 32);
       this.camera.lookAt(9, 3.6, 0);
       this.resizeObserver = new ResizeObserver(() => this.resize());
       this.resizeObserver.observe(this.host);
       this.resize();
+      await this.terrain.prepare();
+      if (this.disposed) return;
+      await this.enemyModels.prepare();
+      if (this.disposed) return;
+      await this.hazards.prepare();
+      if (this.disposed) return;
+      // Precompile every enemy and biome shader before accepting gameplay input.
+      const groups = [
+        ...this.terrain.warmupGroups(),
+        ...this.enemyModels.warmupGroups,
+        ...this.hazards.warmupGroups,
+      ];
+      const culled = new Map<T.Object3D, boolean>();
+      const visibility = new Map<T.Object3D, boolean>();
+      const parents = groups.map((group) => group.parent);
+      for (const group of groups) {
+        this.scene.add(group);
+        group.traverse((object) => {
+          culled.set(object, object.frustumCulled);
+          visibility.set(object, object.visible);
+          object.visible = true;
+          object.frustumCulled = false;
+        });
+      }
+      try {
+        for (const batch of [
+          ...this.shotBatches,
+          this.particleMesh,
+          this.weaponEffects.energy,
+          this.weaponEffects.slag,
+        ]) {
+          batch.count = 1;
+          batch.visible = true;
+          batch.instanceMatrix.needsUpdate = true;
+        }
+        await this.renderer.compileAsync(this.scene, this.camera);
+        this.graphics.render(false, 0);
+        // Submit uploads and shadow pipelines behind the loading screen as well.
+        if ('device' in this.renderer.backend)
+          await (this.renderer.backend.device as GPUDevice).queue.onSubmittedWorkDone();
+        // Distant chunks are clipped after the vertex stage even with frustum culling
+        // disabled. Rasterize each biome in view so its first visible pixels do not
+        // trigger deferred driver work at a live sector boundary.
+        for (const group of groups) group.visible = false;
+        for (const view of this.terrain.warmupViews()) {
+          view.group.visible = true;
+          view.group.position.x = -view.origin;
+          this.graphics.render(false, 0);
+          if ('device' in this.renderer.backend)
+            await (this.renderer.backend.device as GPUDevice).queue.onSubmittedWorkDone();
+          view.group.position.x = 0;
+          view.group.visible = false;
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+      } finally {
+        for (const view of this.terrain.warmupViews()) view.group.position.x = 0;
+        for (const batch of [
+          ...this.shotBatches,
+          this.particleMesh,
+          this.weaponEffects.energy,
+          this.weaponEffects.slag,
+        ]) {
+          batch.count = 0;
+          batch.visible = false;
+        }
+        groups.forEach((group, i) => {
+          group.removeFromParent();
+          parents[i]?.add(group);
+        });
+        culled.forEach((value, object) => {
+          object.frustumCulled = value;
+        });
+        visibility.forEach((value, object) => {
+          object.visible = value;
+        });
+      }
+      if (this.disposed) return;
+      // Exercise populated, transformed batches in the ordinary scene too. Identity-only
+      // compilation does not cover every pipeline used by the first live impact.
+      this.state.phase = 'playing';
+      this.current.copy(this.body.translation());
+      this.previous.copy(this.current);
+      this.shoot('pulse', 8, 4, 0, 0, 0, false);
+      this.shoot('bomb', 12, 8, 0, 0, 0, true);
+      this.burst(10, 3, 16);
+      this.strike(18);
+      this.weaponEffects.melt(14, this.terrain.heightAt(14));
+      this.beam = { x: 3, y: 2, length: 8, active: true };
+      this.railCharge.update(true, false, 0.5);
+      for (let i = 0; i < 3; i++) {
+        this.render(FIXED_DT, {
+          brake: false,
+          boost: false,
+          jump: false,
+          fire: false,
+          vent: false,
+          pitch: 0,
+        });
+        this.graphics.render(false, 0);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      if ('device' in this.renderer.backend)
+        await (this.renderer.backend.device as GPUDevice).queue.onSubmittedWorkDone();
+      this.clearEntities();
+      this.weaponEffects.reset();
+      this.stopWeapons();
+      this.state.phase = 'menu';
+      if (this.disposed) return;
+      this.seedPreview();
+      this.render(FIXED_DT, {
+        brake: false,
+        boost: false,
+        jump: false,
+        fire: false,
+        vent: false,
+        pitch: 0,
+      });
+      this.graphics.render(false, 0);
+      this.renderer.domElement.style.visibility = '';
       window.addEventListener('keydown', this.keyDown);
       window.addEventListener('keyup', this.keyUp);
       window.addEventListener('blur', this.blur);
@@ -331,6 +468,9 @@ export class Game {
     } catch (e) {
       if (!this.disposed)
         this.onError(e instanceof Error ? e.message : 'Unable to initialize the renderer.');
+    } finally {
+      this.initializing = false;
+      if (this.disposed) this.dispose();
     }
   }
   private seedPreview() {
@@ -370,7 +510,8 @@ export class Game {
       return;
     }
     if (e.code === 'Enter' && ['menu', 'dead', 'complete'].includes(this.state.phase)) {
-      this.start();
+      if (this.state.phase === 'dead' && this.retryPoint) this.retryCheckpoint();
+      else this.start();
       return;
     }
     if (e.code === 'KeyM') {
@@ -411,6 +552,7 @@ export class Game {
   start(loadout?: Loadout) {
     if (!this.ready) return;
     if (loadout) this.loadout = loadout;
+    this.retryPoint = undefined;
     this.clearEntities();
     this.hazards.reset();
     this.director.reset();
@@ -418,9 +560,8 @@ export class Game {
     this.launched = false;
     this.landingBoost = 0;
     this.tutorialStage = 0;
-    this.terrain.dispose();
-    this.terrain = new Terrain(this.scene, this.world, this.compute);
-    this.terrain.update(0);
+    this.patrolJump.reset();
+    this.terrain.reset();
     this.state = {
       ...initialTelemetry(this.state.best),
       phase: 'playing',
@@ -480,8 +621,58 @@ export class Game {
     this.state.capacitor = 100;
     this.state.heat = 0;
     this.state.lockout = 0;
+    this.state.checkpoint = this.state.sector;
+    this.retryPoint = {
+      state: { ...this.state, radar: [] },
+      x: safeGroundPosition(this.state.sector * SECTOR_LENGTH + 10),
+      nextReport: this.nextReport,
+    };
     this.stopWeapons();
     this.announce('ROVER SERVICED · ROUTE RESUMED');
+    this.emit();
+  }
+  retryCheckpoint() {
+    if (this.state.phase !== 'dead' || !this.retryPoint) return;
+    const saved = this.retryPoint,
+      retries = this.state.retries + 1;
+    this.start();
+    const { best, backend, quality, fps } = this.state;
+    this.retryPoint = saved;
+    this.state = {
+      ...saved.state,
+      best,
+      backend,
+      quality,
+      fps,
+      retries,
+      phase: 'playing',
+      hull: 100,
+      capacitor: 100,
+      heat: 0,
+      lockout: 0,
+      railCharge: 0,
+      beamActive: false,
+      radar: [],
+      warning: '',
+      distance: saved.x,
+      speed: 18,
+    };
+    this.terrain.update(saved.x);
+    this.hazards.stream(saved.x);
+    this.body.setTranslation({ x: saved.x, y: this.terrain.heightAt(saved.x) + 2, z: 0 }, true);
+    this.current.copy(this.body.translation());
+    this.previous.copy(this.current);
+    this.elapsed = saved.state.time;
+    this.nextReport = saved.nextReport;
+    this.sectorBefore = saved.state.sector;
+    this.reportMark = {
+      time: saved.state.time,
+      kills: saved.state.kills,
+      clean: saved.state.clean,
+      damage: 0,
+    };
+    this.camera.position.set(saved.x + 12, 10.2, 34);
+    this.announce('CHECKPOINT RECOVERY · ROVER REPAIRED · SCORE RESTORED');
     this.emit();
   }
   menu() {
@@ -582,12 +773,21 @@ export class Game {
     if (!grounded) this.airborneTime += dt;
     if (grounded && !this.lastGrounded && this.airborneTime > 0.3) {
       const angle = 2 * Math.atan2(this.body.rotation().z, this.body.rotation().w);
-      if (landingQuality(angle, slope, v.y, this.airborneTime, this.launched)) {
+      const clearance = this.patrolJump.land(p.x);
+      const clean = landingQuality(angle, slope, v.y, this.airborneTime, this.launched);
+      if (clean) {
         s.clean++;
         s.score += 250;
         this.landingBoost = 1.2;
         this.announce('CLEAN LANDING +250 · MOMENTUM BOOST');
         this.audio.tone(660, 0.15, 'sine', 0.2);
+      }
+      if (clearance > 0) {
+        s.score += clearance;
+        this.announce(
+          clean ? `CLEAN LANDING +250 · CLEARANCE +${clearance}` : `PATROL CLEARANCE +${clearance}`,
+        );
+        if (!clean) this.audio.tone(880, 0.12, 'sine', 0.16);
       }
       this.trauma = Math.min(1, this.airborneTime * 0.15);
       this.burst(p.x, p.y - 0.6, 14);
@@ -602,6 +802,7 @@ export class Game {
     this.body.applyImpulse({ x: acceleration * this.body.mass() * dt, y: 0, z: 0 }, true);
     if (this.jumpAssist.update(input.jump, grounded, dt)) {
       this.launched = true;
+      this.patrolJump.launch(p.x);
       this.body.applyImpulse({ x: 0, y: this.body.mass() * 11.5, z: 0 }, true);
       this.audio.jump();
       this.burst(p.x, p.y - 1, 24);
@@ -618,6 +819,7 @@ export class Game {
     this.world.step();
     this.current.copy(this.body.translation());
     if (this.current.y < -5.5) {
+      this.patrolJump.reset();
       this.hurt(35);
       if (s.phase === 'playing') {
         let x = this.current.x + 14;
@@ -661,12 +863,20 @@ export class Game {
       this.wave();
       this.spawnAt = this.elapsed + 0.1;
     }
-    if (this.tutorialStage === 0 && s.distance > 60 && s.distance < 105) {
+    if (this.tutorialStage === 0 && s.distance > 20 && s.distance < 75) {
       this.tutorialStage = 1;
+      this.announce('ROCK AHEAD · J TO SHOOT / SPACE TO CLEAR');
+    }
+    if (this.tutorialStage < 2 && s.distance > 78 && s.distance < 105) {
+      this.tutorialStage = 2;
       this.announce('CHASM AHEAD · TAP SPACE / HOLD TO HOVER');
     }
-    if (this.tutorialStage === 1 && s.distance > 185) {
-      this.tutorialStage = 2;
+    if (this.tutorialStage < 3 && s.distance > 130 && s.distance < 185) {
+      this.tutorialStage = 3;
+      this.announce('SAUCERS INBOUND · J FIRES FORWARD + UP');
+    }
+    if (this.tutorialStage < 4 && s.distance > 185) {
+      this.tutorialStage = 4;
       this.announce('SHIFT FOR OVERDRIVE · K TO VENT WEAPONS');
     }
     if (s.sector !== this.sectorBefore) {
@@ -842,7 +1052,15 @@ export class Game {
         heat = w === 'pulse' ? 7 : 20;
       if (addHeat(s, heat)) {
         const damage = w === 'pulse' ? 1 : 5;
-        this.shoot(w, p.x + 2.6, p.y + 0.45, 70, w === 'seismic' ? -4 : 0, damage, false);
+        this.shoot(
+          w,
+          p.x + 2.6,
+          p.y + 0.45,
+          70 + this.body.linvel().x,
+          w === 'seismic' ? -4 : 0,
+          damage,
+          false,
+        );
         this.fireCooldown = w === 'pulse' ? 0.15 : 0.7;
         this.audio.shot();
       }
@@ -863,7 +1081,7 @@ export class Game {
             w,
             p.x - 0.6,
             p.y + 2.3,
-            Math.cos(angle + (i - 1.5) * (w === 'seeker' ? 0.07 : 0)) * 40,
+            Math.cos(angle + (i - 1.5) * (w === 'seeker' ? 0.07 : 0)) * 40 + this.body.linvel().x,
             Math.sin(angle) * 40,
             2,
             false,
@@ -974,7 +1192,7 @@ export class Game {
     }
   }
   private spawn(kind: EnemyKind, x: number, y: number) {
-    const group = makeEnemy(kind);
+    const group = this.enemyModels.acquire(kind);
     group.position.set(x, y, 0);
     this.scene.add(group);
     const hp =
@@ -1035,10 +1253,18 @@ export class Game {
           e.timer = 0;
         }
         if (e.kind === 'boss') this.state.boss = Math.max(0, e.hp);
+        const light = e.group.userData.warningLight as T.MeshStandardMaterial;
+        const release = e.kind === 'boss' ? 1.25 : 2.4;
+        light.emissiveIntensity = e.timer > release - 0.6 ? 3 + Math.sin(e.timer * 35) * 1.5 : 1.3;
       }
       if (e.kind === 'hunter') {
         e.x -= dt * 3;
         e.y = 10 + Math.sin(this.elapsed);
+        const beam = e.group.userData.tractorBeam as T.Mesh<
+          T.CylinderGeometry,
+          T.MeshBasicMaterial
+        >;
+        beam.material.opacity = Math.abs(e.x - p.x) < 4 && !boost ? 0.24 : 0.045;
         if (Math.abs(e.x - p.x) < 4 && !boost) {
           this.body.applyImpulse({ x: 0, y: this.body.mass() * 22 * dt, z: 0 }, true);
           this.announce('TRACTOR BEAM · BOOST TO ESCAPE');
@@ -1078,6 +1304,8 @@ export class Game {
           }
       }
       if (e.kind === 'drone') e.group.rotation.z = (e.x - prevX) * 0.4;
+      if (e.hp > 0 && !e.collided && this.launched)
+        this.patrolJump.cross(e, e.kind, e.x, e.y, p.x, p.y);
       if (
         e.hp > 0 &&
         Math.hypot(e.x - p.x, e.y - p.y) < (e.kind === 'rock' ? 2.6 - e.melt * 0.7 : 2.3)
@@ -1106,16 +1334,13 @@ export class Game {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
       if (e.hp <= 0 || e.x < p.x - 25) {
-        disposeGroup(e.group);
+        this.enemyModels.release(e.group);
         this.enemies.splice(i, 1);
       }
     }
   }
   private strike(x: number) {
-    const mesh = new T.Mesh(
-      new T.CylinderGeometry(0.08, 0.08, 40, 6),
-      new T.MeshBasicMaterial({ color: '#ff5358', transparent: true, opacity: 0.6 }),
-    );
+    const mesh = new T.Mesh(this.strikeGeometry, this.strikeMaterial);
     mesh.position.set(x, 18, 0);
     this.scene.add(mesh);
     this.strikes.push({ x, timer: 1.5, mesh, fired: false });
@@ -1138,7 +1363,7 @@ export class Game {
     }
     for (let i = this.strikes.length - 1; i >= 0; i--)
       if (this.strikes[i].timer <= 0 && this.strikes[i].fired) {
-        disposeGroup(this.strikes[i].mesh);
+        this.strikes[i].mesh.removeFromParent();
         this.strikes.splice(i, 1);
       }
   }
@@ -1154,6 +1379,7 @@ export class Game {
   }
   private hurt(amount: number) {
     if (this.invulnerable > 0) return;
+    this.patrolJump.reset();
     this.state.hull = Math.max(0, this.state.hull - amount);
     this.reportMark.damage += amount;
     this.invulnerable = 1.2;
@@ -1241,6 +1467,8 @@ export class Game {
       this.rover.wheels[i].position.y = -0.1 - (this.vehicle.wheelSuspensionLength(i) ?? 0.6);
       this.rover.wheels[i].rotation.z = -(this.vehicle.wheelRotation(i) ?? 0);
     }
+    updateSuspension(this.rover);
+    updateWheelBatches(this.rover);
     const boost = this.state.phase === 'playing' && input.boost && this.state.capacitor > 0;
     this.rover.flame.visible = boost;
     this.rover.flame.scale.x = 0.8 + Math.random() * 0.7;
@@ -1318,7 +1546,7 @@ export class Game {
           offscreen: Math.abs(point.x) > 0.85,
         };
       });
-    this.backdrop.group.position.x = p.x * 0.98;
+    updateParallax(this.backdrop, p.x);
     this.light.position.x = p.x - 25;
     this.light.target.position.x = p.x + 10;
     (this.scene.background as T.Color).lerp(
@@ -1362,13 +1590,13 @@ export class Game {
     if (particleCount > 0) this.particleMesh.instanceMatrix.needsUpdate = true;
   }
   private clearEntities() {
-    for (const e of this.enemies) disposeGroup(e.group);
+    for (const e of this.enemies) this.enemyModels.release(e.group);
     this.enemies = [];
     for (const s of this.shots) {
       s.active = false;
       s.mesh.visible = false;
     }
-    for (const s of this.strikes) disposeGroup(s.mesh);
+    for (const s of this.strikes) s.mesh.removeFromParent();
     this.strikes = [];
     for (const p of this.particles) p.life = 0;
   }
@@ -1380,19 +1608,24 @@ export class Game {
     window.removeEventListener('keyup', this.keyUp);
     window.removeEventListener('blur', this.blur);
     document.removeEventListener('visibilitychange', this.visibility);
+    if (this.initializing || this.released) return;
+    this.released = true;
     this.audio.dispose();
-    if (this.ready) {
-      this.clearEntities();
-      this.hazards.dispose();
-      this.terrain.dispose();
-      this.world.free();
-      this.graphics.dispose();
-      this.lighting.dispose();
-      this.light.dispose();
-      disposeGroup(this.scene);
-      this.compute.dispose();
-      this.renderer.dispose();
-      this.renderer.domElement.remove();
-    }
+    this.clearEntities();
+    this.enemyModels.dispose();
+    this.hazards?.dispose();
+    this.terrain?.dispose();
+    this.world?.free();
+    this.graphics?.dispose();
+    this.lighting?.dispose();
+    this.light.dispose();
+    this.strikeGeometry.dispose();
+    this.strikeMaterial.dispose();
+    disposeGroup(this.rover.group);
+    this.backdrop?.mountainMaterial.dispose();
+    disposeGroup(this.scene);
+    this.compute.dispose();
+    this.renderer?.dispose();
+    this.renderer?.domElement.remove();
   }
 }

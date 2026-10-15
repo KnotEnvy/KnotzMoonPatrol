@@ -45,6 +45,19 @@ export function makeRover() {
   for (const z of [-0.72, 0.72]) box(group, [0.1, 0.18, 0.35], [2.08, 0.42, z], glow);
   box(group, [0.1, 1.2, 0.1], [-1.7, 1.55, -0.7], dark);
   box(group, [0.18, 0.14, 0.18], [-1.7, 2.18, -0.7], orange);
+  // Fender shoulders, access panels and roll cage keep the six-wheel silhouette legible.
+  for (const z of [-1.02, 1.02]) {
+    box(group, [4.3, 0.16, 0.3], [-0.1, 0.13, z], cream);
+    box(group, [1.3, 0.36, 0.06], [-1.15, 0.46, z], dark);
+    for (let i = 0; i < 3; i++) box(group, [0.07, 0.25, 0.08], [-1.55 + i * 0.3, 0.46, z], orange);
+    box(group, [1.9, 0.09, 0.1], [0.45, 1.6, z * 0.88], dark);
+    box(group, [0.09, 0.9, 0.1], [-0.45, 1.12, z * 0.88], dark);
+  }
+  box(group, [0.18, 0.26, 2.3], [2.22, 0.02, 0], dark);
+  for (const z of [-0.65, 0.65]) {
+    box(group, [0.6, 0.4, 0.45], [-2.15, 0.15, z], dark);
+    box(group, [0.08, 0.23, 0.3], [-2.47, 0.15, z], orange);
+  }
   const turret = new T.Group();
   turret.position.set(-0.6, 1.18, 0);
   group.add(turret);
@@ -79,52 +92,212 @@ export function makeRover() {
       }
       batchStaticMeshes(wheel);
     }
+  // Six wheels share geometry and materials; keep their pivots for suspension,
+  // but submit each matching component once instead of six separate draws.
+  const wheelBatches: T.InstancedMesh[] = [];
+  for (const child of wheels[0].children) {
+    if (!(child instanceof T.Mesh)) continue;
+    child.updateMatrix();
+    const batch = new T.InstancedMesh(
+      child.geometry.clone().applyMatrix4(child.matrix),
+      child.material,
+      wheels.length,
+    );
+    batch.castShadow = child.castShadow;
+    batch.receiveShadow = child.receiveShadow;
+    batch.frustumCulled = false;
+    batch.instanceMatrix.setUsage(T.DynamicDrawUsage);
+    group.add(batch);
+    wheelBatches.push(batch);
+  }
+  for (const wheel of wheels)
+    for (const child of [...wheel.children]) {
+      if (child instanceof T.Mesh) child.geometry.dispose();
+      child.removeFromParent();
+    }
   batchStaticMeshes(turret);
   batchStaticMeshes(group);
+  const suspension = new T.InstancedMesh(new T.CylinderGeometry(0.09, 0.09, 1, 6), orange, 6);
+  suspension.instanceMatrix.setUsage(T.DynamicDrawUsage);
+  suspension.frustumCulled = false;
+  group.add(suspension);
   const flame = box(group, [1.5, 0.22, 1.2], [-2.9, -0.05, 0], glow);
   flame.visible = false;
-  return { group, wheels, turret, flame };
+  const rover = { group, wheels, turret, flame, suspension, wheelBatches };
+  updateWheelBatches(rover);
+  updateSuspension(rover);
+  return rover;
+}
+const strutTransform = new T.Object3D();
+const strutStart = new T.Vector3();
+const strutEnd = new T.Vector3();
+const strutDirection = new T.Vector3();
+const strutAxis = new T.Vector3(0, 1, 0);
+export function updateWheelBatches(rover: { wheels: T.Group[]; wheelBatches: T.InstancedMesh[] }) {
+  rover.wheels.forEach((wheel, i) => {
+    wheel.updateMatrix();
+    for (const batch of rover.wheelBatches) batch.setMatrixAt(i, wheel.matrix);
+  });
+  for (const batch of rover.wheelBatches) batch.instanceMatrix.needsUpdate = true;
+}
+export function updateSuspension(rover: { wheels: T.Group[]; suspension: T.InstancedMesh }) {
+  rover.wheels.forEach((wheel, i) => {
+    strutStart.set(wheel.position.x - 0.35, 0.05, wheel.position.z * 0.7);
+    strutEnd.copy(wheel.position);
+    strutDirection.subVectors(strutEnd, strutStart);
+    strutTransform.position.copy(strutStart).add(strutEnd).multiplyScalar(0.5);
+    strutTransform.scale.set(1, strutDirection.length(), 1);
+    strutTransform.quaternion.setFromUnitVectors(strutAxis, strutDirection.normalize());
+    strutTransform.updateMatrix();
+    rover.suspension.setMatrixAt(i, strutTransform.matrix);
+  });
+  rover.suspension.instanceMatrix.needsUpdate = true;
 }
 export function makeEnemy(kind: string) {
   const g = new T.Group(),
-    dark = mat('#343a47', 0.7, 0.35),
-    glow = mat('#fc685a', 0.3, 0.25, '#b52c31'),
-    pale = mat('#969b9c', 0.6, 0.35);
+    dark = mat('#343a47', 0.65, 0.4),
+    glow = mat(
+      kind === 'hunter' ? '#80ffe1' : '#fc685a',
+      0.3,
+      0.25,
+      kind === 'hunter' ? '#28b58b' : '#b52c31',
+    ),
+    pale = mat('#bbc0c5', 0.55, 0.42);
+  g.name = kind;
+  // Consistent shadow flags allow all static pieces to collapse to three material batches.
+  const solid = (geometry: T.BufferGeometry, material: T.Material, x = 0, y = 0, z = 0) => {
+    const mesh = new T.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = mesh.receiveShadow = true;
+    g.add(mesh);
+    return mesh;
+  };
+  const finish = () => {
+    batchStaticMeshes(g);
+    // Some archetypes use only a subset of the palette.
+    const used = new Set<T.Material>();
+    g.traverse((o) => {
+      if (o instanceof T.Mesh)
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) used.add(m);
+    });
+    for (const m of [dark, glow, pale]) if (!used.has(m)) m.dispose();
+    return g;
+  };
   if (kind === 'rock') {
-    const rock = new T.Mesh(new T.DodecahedronGeometry(1.15, 0), mat('#687277'));
+    pale.color.set('#687277');
+    pale.metalness = 0.05;
+    pale.roughness = 0.95;
+    pale.flatShading = true;
+    const rock = solid(new T.DodecahedronGeometry(1.15, 1), pale);
     rock.scale.set(1.3, 1.1, 1);
     rock.rotation.set(0.4, 0.6, 0.2);
-    rock.castShadow = true;
-    g.add(rock);
-    return g;
+    // A fractured foot breaks the perfect-polyhedron silhouette without enlarging the hurtbox.
+    const chip = solid(new T.DodecahedronGeometry(0.55, 0), pale, -0.65, -0.55, 0.35);
+    chip.rotation.set(0.2, 0.9, 0.6);
+    return finish();
   }
   if (kind === 'mine') {
-    const ball = new T.Mesh(new T.IcosahedronGeometry(0.6, 0), dark);
-    g.add(ball);
-    box(g, [1.5, 0.12, 0.12], [0, 0, 0], glow);
-    box(g, [0.12, 1.5, 0.12], [0, 0, 0], glow);
-    return g;
+    solid(new T.IcosahedronGeometry(0.6, 1), dark);
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI) / 3;
+      const spike = solid(
+        new T.ConeGeometry(0.16, 0.6, 6),
+        pale,
+        Math.sin(a) * 0.7,
+        Math.cos(a) * 0.7,
+      );
+      spike.rotation.z = -a;
+    }
+    solid(new T.SphereGeometry(0.25, 10, 8), glow, 0, 0, 0.53);
+    return finish();
   }
   if (kind === 'skimmer') {
-    box(g, [2, 0.65, 1.5], [0, 0, 0], dark);
-    box(g, [0.5, 0.2, 1.6], [0.5, 0.3, 0], glow);
-    return g;
+    box(g, [1.8, 0.55, 1.3], [0, 0.1, 0], pale);
+    for (const z of [-0.8, 0.8]) {
+      box(g, [2.25, 0.5, 0.45], [0, -0.2, z], dark);
+      for (let i = 0; i < 5; i++) box(g, [0.12, 0.53, 0.48], [-0.85 + i * 0.42, -0.2, z], pale);
+    }
+    box(g, [0.9, 0.5, 0.8], [-0.25, 0.56, 0], dark);
+    box(g, [1, 0.17, 0.2], [-1, 0.55, 0], pale);
+    box(g, [0.09, 0.22, 0.25], [-1.5, 0.55, 0], glow);
+    box(g, [0.65, 0.14, 0.08], [-0.28, 0.58, 0.43], glow);
+    return finish();
   }
   if (kind === 'leech') {
-    const cone = new T.Mesh(new T.ConeGeometry(0.8, 2.6, 7), glow);
-    g.add(cone);
-    return g;
+    for (let i = 0; i < 5; i++) {
+      const segment = solid(
+        new T.IcosahedronGeometry(0.68 - i * 0.075, 0),
+        i % 2 ? dark : pale,
+        Math.sin(i * 0.8) * 0.22,
+        -1 + i * 0.45,
+      );
+      segment.scale.y = 0.65;
+    }
+    for (const x of [-0.28, 0.28]) {
+      const fang = solid(new T.ConeGeometry(0.16, 0.7, 6), glow, x, 1.15);
+      fang.rotation.z = x;
+    }
+    return finish();
   }
-  const big = kind === 'boss' ? 3.4 : kind === 'bomber' ? 1.7 : 1;
-  box(g, [2.3, 0.5, 1.5], [0, 0, 0], dark);
-  box(g, [0.7, 0.32, 1.56], [-0.3, 0.1, 0], glow);
-  for (const z of [-1.4, 1.4]) {
-    const wing = box(g, [2.4, 0.12, 1.1], [0.25, 0, z], pale);
-    wing.rotation.y = z * 0.2;
-    box(g, [0.6, 0.18, 0.6], [-0.4, -0.2, z], glow);
+  if (kind === 'interceptor') {
+    const nose = solid(new T.ConeGeometry(0.65, 3.3, 4), pale, -0.2);
+    nose.rotation.z = Math.PI / 2;
+    for (const z of [-1, 1]) {
+      const wing = box(g, [1.9, 0.12, 0.75], [0.6, -0.1, z], dark);
+      wing.rotation.y = z * -0.6;
+      box(g, [0.15, 0.23, 0.45], [1.5, 0, z * 0.5], glow);
+    }
+    box(g, [0.75, 0.22, 0.42], [-0.15, 0.38, 0], glow);
+    return finish();
+  }
+  if (kind === 'bomber') {
+    box(g, [2.7, 0.75, 1.7], [0, 0, 0], dark);
+    box(g, [1.3, 0.5, 1.2], [-0.5, 0.52, 0], pale);
+    box(g, [0.15, 0.3, 1], [-1.2, 0.48, 0], glow);
+    for (const z of [-1.4, 1.4]) {
+      box(g, [3.6, 0.6, 0.85], [0.2, -0.08, z], pale);
+      box(g, [0.15, 0.35, 0.6], [2.02, -0.08, z], glow);
+      for (let i = 0; i < 3; i++)
+        solid(new T.SphereGeometry(0.27, 10, 8), glow, -0.8 + i * 0.8, -0.56, z);
+    }
+    // An exposed belly bay flashes before a torpedo drops.
+    box(g, [1, 0.17, 0.8], [0, -0.5, 0], glow);
+    g.userData.warningLight = glow;
+    return finish();
+  }
+  // The scout and tractor hunter are recognizably saucers, with different proportions.
+  const radius = kind === 'boss' ? 4.7 : kind === 'hunter' ? 1.65 : 1.35;
+  solid(
+    new T.CylinderGeometry(radius * 0.5, radius, kind === 'boss' ? 1.1 : 0.45, 24),
+    pale,
+    0,
+    0.15,
+  );
+  solid(new T.CylinderGeometry(radius, radius * 0.55, 0.35, 24), dark, 0, -0.22);
+  const dome = solid(new T.SphereGeometry(radius * 0.47, 20, 12), dark, 0, 0.5);
+  dome.scale.y = 0.65;
+  for (let i = 0; i < 10; i++) {
+    const a = (i * Math.PI) / 5;
+    solid(
+      new T.SphereGeometry(kind === 'boss' ? 0.21 : 0.1, 8, 6),
+      glow,
+      Math.cos(a) * radius * 0.84,
+      0.12,
+      Math.sin(a) * radius * 0.84,
+    );
+  }
+  if (kind === 'boss') {
+    const core = solid(new T.SphereGeometry(0.9, 16, 12), glow, 0, -0.65);
+    core.scale.y = 0.7;
+    for (const x of [-3.2, 3.2]) {
+      box(g, [1, 2.1, 1.3], [x, 0.35, 0], dark);
+      box(g, [0.7, 0.2, 1.4], [x, 1.45, 0], glow);
+      box(g, [0.3, 1.1, 0.4], [x, -1.1, 0], pale);
+    }
+    g.userData.warningLight = glow;
   }
   if (kind === 'hunter') {
-    const ring = new T.Mesh(new T.TorusGeometry(1.6, 0.13, 6, 28), glow);
+    const ring = solid(new T.TorusGeometry(1.6, 0.13, 6, 28), glow, 0, -0.5);
     ring.rotation.x = Math.PI / 2;
     g.add(ring);
     const beam = new T.Mesh(
@@ -139,10 +312,9 @@ export function makeEnemy(kind: string) {
     );
     beam.position.y = -5;
     g.add(beam);
+    g.userData.tractorBeam = beam;
   }
-  batchStaticMeshes(g);
-  g.scale.setScalar(big);
-  return g;
+  return finish();
 }
 export function makeBackdrop(scene: T.Scene) {
   const group = new T.Group();
@@ -195,8 +367,31 @@ export function makeBackdrop(scene: T.Scene) {
   halo.position.copy(planet.position);
   group.add(halo);
   const mountainMaterial = mat('#233644', 0.1, 1);
-  for (let layer = 0; layer < 3; layer++) group.add(makeRidge(layer));
-  return { group, planet, mountainMaterial };
+  const ridges: T.Group[] = [];
+  for (let layer = 0; layer < 3; layer++) {
+    const strip = new T.Group();
+    const ridge = makeRidge(layer);
+    for (const x of [-600, 0, 600]) {
+      const tile = ridge.clone();
+      tile.position.x = x;
+      strip.add(tile);
+    }
+    batchStaticMeshes(strip);
+    group.add(strip);
+    ridges.push(strip);
+  }
+  return { group, planet, mountainMaterial, ridges };
+}
+export function updateParallax(
+  backdrop: Pick<ReturnType<typeof makeBackdrop>, 'group' | 'ridges'>,
+  x: number,
+) {
+  backdrop.group.position.x = x * 0.98;
+  backdrop.ridges.forEach((ridge, layer) => {
+    // Periodic geometry and repeated tiles keep all three depths continuous over A-Z.
+    const speed = [0.26, 0.14, 0.06][layer];
+    ridge.position.x = x * 0.02 - ((x * speed) % 600);
+  });
 }
 export function disposeMaterial(material: T.Material) {
   const m = material as T.MeshStandardMaterial;
@@ -239,12 +434,14 @@ export function makeRidge(layer: number) {
     for (let j = 0; j <= 8; j++) {
       const x = i * 5 - 300,
         z = -34 - layer * 30 - j * 5;
+      const sample = i % 120;
       const ridge =
-        Math.pow(Math.max(0, Math.sin(i * 0.17 + layer * 2) * 0.4 + 0.5), 0.7) * 11 +
-        randomAt(i + layer * 200) * 6;
-      const y = -3 + Math.sin((j / 8) * Math.PI) * ridge + randomAt(i * 9 + j + layer * 93) * 2;
+        Math.pow(Math.max(0, Math.sin((sample * Math.PI) / 20 + layer * 2) * 0.4 + 0.5), 0.7) * 11 +
+        randomAt(sample + layer * 200) * 6;
+      const y =
+        -3 + Math.sin((j / 8) * Math.PI) * ridge + randomAt(sample * 9 + j + layer * 93) * 2;
       vertices.push(x, y, z);
-      const shade = 0.75 + randomAt(i * 7 + j) * 0.35;
+      const shade = 0.75 + randomAt(sample * 7 + j) * 0.35;
       colors.push(color.r * shade, color.g * shade, color.b * shade);
     }
   for (let i = 0; i < 120; i++)

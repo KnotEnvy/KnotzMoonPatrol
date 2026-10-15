@@ -86,8 +86,35 @@ Gameplay, graphics, and terrain continuations are merged on `main`, with success
 
 See [deployment](DEPLOYMENT.md) and [world-detail handoff](WORLD-DETAIL-HANDOFF.md). Publishing/integration readiness does not close the product acceptance gates below.
 
+## October 13 classic patrol continuation
+
+See [the asset/gameplay review](CLASSIC-PATROL-PASS.md) for all nine threat silhouettes, rover suspension detail, independent ridge parallax, biome props, safe-landing clearance rewards, and encounter-ordered onboarding. The review records remaining work for each major game element rather than treating this pass as full production acceptance.
+
+50 unit tests and native/fallback patrol, weapon, graphics, and hazard scenarios pass; gameplay/boss/retry also passes. The Balanced stress capture keeps 100 projectiles and 600 debris, with 79/53 draws and 17.0 ms p95 on both backends. Maximum frames remain 50.1/33.4 ms and the canvas is 1920x976. Human A-Z balance, listening, physical-device testing, and the acceptance targets below remain open.
+
+The local Pages production build/smoke and streaming checks pass on both backends with zero console errors. This continuation is local on `codex/classic-assets-gameplay`; it has not been published to the hosted game.
+
+## October 13 beta balance and frame pacing
+
+The [beta continuation](BETA-BALANCE-PERFORMANCE.md) adds full-route audits, checkpoint recovery with score rollback, rover-velocity inheritance for projectiles, a prepared finite terrain/hazard cache, reusable enemy actors, combat pipeline warmup, an immediate launch HUD, and four component batches for the six animated wheels.
+
+53 unit tests pass. Gameplay/boss/retry, both-backend weapons, hazards, all-biome graphics, and checkpoint-recovery checks pass with zero console errors. The automated production audit completes A-Z with all three representative loadout pairs on both backends; Beam/Rail uses one ordinary checkpoint recovery. This remains distinct from human difficulty acceptance.
+
+The final native-1080p heavy fixture holds 100 projectiles, 600 debris particles, active energy effects, and 16 slag pools for 600 sampled frames. Both backends record 16.7 ms median, 16.9 ms p95, 17.0 ms p99, and 17.1 ms maximum. Wheel batching reduces its draws from 81 to 51 native and 55 to 35 fallback. See the continuation report for full-route measurements, cache memory tradeoffs, capture isolation, and remaining limitations. The separate benchmark build retains instrumentation; publishable builds strip it.
+
+The final normal-speed A-Z capture still fails the frame-pacing gate: native/fallback p95 is 33.6/50.0 ms, with maxima of 300.1/1,050.3 ms. Both runs complete with 37 hull and stable resource counters, but this is not consistently smooth 60 FPS. Publishing remains on hold. The local Pages production build/smoke pass; nothing was deployed.
+
+## October 15 merge decision
+
+The user authorized merging to `main` and reported that YouTube was running on NitroBliss during the timing tests; NitroBliss is also substantially slower than Superbeast. The timing captures below remain historical shared-host measurements and do not isolate code performance or establish results on Superbeast. This authorization supersedes the earlier publishing hold. The repository's existing `main` workflow validates and deploys Pages. A clean target-hardware 40 FPS measurement remains an open acceptance item. Project test browsers and preview servers were closed for handoff; reusable regression tests and ignored local evidence were retained.
+
 ## Acceptance checklist
 
+October 15 adds prepared terrain colliders and regional static-scenery batches, retaining full geometry/material/shadow assignments. Geometry resources drop from 803 to 452; fixed native/fallback draws drop from 51/35 to 45/31. All 53 unit tests, both-backend recovery and all-biome graphics checks, and all six accelerated route audits pass. These workload reductions do not by themselves establish a frame-rate improvement. The user's current release requirement is a strict 40 FPS minimum throughout A-Z, measured by `npm run test:frame-floor` against the production benchmark. See [the updated evidence](BETA-BALANCE-PERFORMANCE.md) for failed and diagnostic captures.
+
+The final October 15 as-is run **fails** that requirement: both routes complete, but native/fallback p95 is 66.8/99.9 ms and the worst frame is 432.9/5,033.3 ms. These results are worse than the earlier capture; do not describe this pass as an established FPS improvement. The following empty-page calibration stays below 17.3 ms. See the merge decision above for the subsequently reported competing workload and authorization to proceed.
+
+- [ ] No frame above 25 ms throughout a normal-speed native-1080p A-Z run, with detailed graphics and audio enabled.
 - [ ] Stable 60 FPS at 1080p under the specified sustained heavy load on baseline hardware.
 - [ ] Stable suspension across the entire authored/destructible route and all gravity transitions.
 - [ ] Terrain carve and collider update within two frames across representative targets and route scenarios. The small-brush 1080p combat fixture passes a 33.3 ms commit budget (native maximum 5.4 ms; fallback 11.2 ms); broader presentation/large-job guarantees remain open.
@@ -96,8 +123,8 @@ See [deployment](DEPLOYMENT.md) and [world-detail handoff](WORLD-DETAIL-HANDOFF.
 
 ## Recommended next implementation pass
 
-1. Profile remaining frame-time spikes on named target hardware. Initial batching and small-brush readback avoidance are complete; validate full-route presentation deadlines and move larger collider jobs to a bounded worker/update pipeline where practical.
-2. Run a complete human A–Z playthrough against the new authored encounters and hazards; tune difficulty and recovery pacing.
+1. Validate full-route frame tails and repeatability on named target hardware using the production benchmark. Initial batching, small-brush readback avoidance, asset preparation, wheel instancing, regional scenery batching, and original terrain collider preparation are complete. Separate remaining CPU submission/scheduling stalls from GPU work before further changes.
+2. Run a complete human A–Z playthrough across loadouts, including checkpoint recovery; tune difficulty against player feedback as well as the automated driver.
 3. Deepen the remaining enemy, weapon, biome, lighting, and audio systems from the PRD.
 4. Add GPU particles and post-processing only against measured frame/memory budgets.
 5. Re-run the PRD acceptance suite and record hardware/browser versions and repeatable captures.

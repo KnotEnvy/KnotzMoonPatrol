@@ -1,6 +1,6 @@
 import * as T from 'three/webgpu';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { baseHeight, BIOMES, biomeIndex, randomAt } from './rules';
+import { baseHeight, BIOMES, biomeIndex, randomAt, FINISH } from './rules';
 import { mat, box, disposeGroup, disposeMaterial } from './models';
 import { biomeSurface } from './surfaces';
 import { TerrainCompute } from './terrain-compute';
@@ -14,10 +14,17 @@ interface Chunk {
   indices: Uint32Array;
   version: number;
 }
+type PreparedChunk = Chunk & { original: Float32Array; baseCollider: RAPIER.Collider };
 export class Terrain {
   private materials = new Map<number, T.MeshStandardMaterial>();
   private retainedMaterials = new Set<T.Material>();
   private chunks = new Map<number, Chunk>();
+  private prepared = new Map<number, PreparedChunk>();
+  private sceneryMaterials = new Map<string, T.MeshStandardMaterial>();
+  private sceneryRegions = new Map<number, T.Group>();
+  private visibleRegions = new Set<number>();
+  private dirty = new Set<number>();
+  private generation = 0;
   private disposed = false;
   private queue = Promise.resolve();
   constructor(
@@ -25,18 +32,99 @@ export class Terrain {
     private world: RAPIER.World,
     private compute: TerrainCompute,
   ) {}
+  /** The route is finite. Build its CPU geometry during loading, never on a driving frame. */
+  async prepare() {
+    for (let id = -2; id <= Math.floor((FINISH + 200) / 64); id++) {
+      if (this.disposed) return;
+      if (!this.prepared.has(id)) this.prepared.set(id, this.build(id));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    // Keep the deformable 64 m surfaces independent. Decorations can share much
+    // larger draws without changing a single vertex, material, or shadow flag.
+    for (const chunk of this.prepared.values()) {
+      const id = Math.floor(chunk.id / 4);
+      let region = this.sceneryRegions.get(id);
+      if (!region) this.sceneryRegions.set(id, (region = new T.Group()));
+      for (const child of [...chunk.group.children]) if (child !== chunk.mesh) region.add(child);
+    }
+    for (const region of this.sceneryRegions.values()) {
+      batchStaticMeshes(region);
+      region.traverse((object) => {
+        if (object === region) return;
+        object.updateMatrix();
+        object.matrixAutoUpdate = false;
+      });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (this.disposed) return;
+    }
+    this.update(0);
+  }
+  warmupGroups() {
+    return [...this.prepared.values()]
+      .map((c) => c.group)
+      .concat([...this.sceneryRegions.values()]);
+  }
+  warmupViews() {
+    const seen = new Set<number>();
+    return [...this.prepared.values()]
+      .filter((chunk) => {
+        const biome = biomeIndex(chunk.id * 64);
+        if (seen.has(biome)) return false;
+        seen.add(biome);
+        return true;
+      })
+      .flatMap((chunk) => {
+        const views = [{ group: chunk.group, origin: chunk.id * 64 }];
+        const scenery = this.sceneryRegions.get(Math.floor(chunk.id / 4));
+        if (scenery) views.push({ group: scenery, origin: chunk.id * 64 });
+        return views;
+      });
+  }
+  private scenery(key: string, color: string, metalness = 0.15, roughness = 0.7, glow?: string) {
+    let material = this.sceneryMaterials.get(key);
+    if (!material) {
+      material = mat(color, metalness, roughness, glow);
+      this.sceneryMaterials.set(key, material);
+      this.retainedMaterials.add(material);
+    }
+    return material;
+  }
   update(x: number) {
     const min = Math.floor((x - 90) / 64),
       max = Math.floor((x + 200) / 64);
     for (let i = min; i <= max; i++) if (!this.chunks.has(i)) this.add(i);
     for (const [id, c] of this.chunks)
       if (id < min || id > max) {
-        this.world.removeCollider(c.collider, true);
-        disposeGroup(c.group, this.retainedMaterials);
+        c.collider.setEnabled(false);
+        c.group.removeFromParent();
         this.chunks.delete(id);
+      }
+    const first = Math.floor(min / 4),
+      last = Math.floor(max / 4);
+    for (let id = first; id <= last; id++) {
+      const region = this.sceneryRegions.get(id);
+      if (region && !this.visibleRegions.has(id)) {
+        this.scene.add(region);
+        this.visibleRegions.add(id);
+      }
+    }
+    for (const id of this.visibleRegions)
+      if (id < first || id > last) {
+        this.sceneryRegions.get(id)?.removeFromParent();
+        this.visibleRegions.delete(id);
       }
   }
   private add(id: number) {
+    let prepared = this.prepared.get(id);
+    if (!prepared) {
+      prepared = this.build(id);
+      this.prepared.set(id, prepared);
+    }
+    prepared.collider.setEnabled(true);
+    this.scene.add(prepared.group);
+    this.chunks.set(id, prepared);
+  }
+  private build(id: number): PreparedChunk {
     const group = new T.Group(),
       vertices: number[] = [],
       indices: number[] = [];
@@ -87,10 +175,10 @@ export class Terrain {
     skirt.setAttribute('position', new T.Float32BufferAttribute(edgeVertices, 3));
     skirt.setIndex(edgeIndices);
     skirt.computeVertexNormals();
-    group.add(new T.Mesh(skirt, mat('#26333e', 0.1, 1)));
+    group.add(new T.Mesh(skirt, this.scenery('skirt', '#26333e', 0.1, 1)));
     const biome = biomeIndex(id * 64),
-      accent = mat(BIOMES[biome].color, 0.2, 0.3, BIOMES[biome].color),
-      markerMaterial = mat('#485d67');
+      accent = this.scenery('accent-' + biome, BIOMES[biome].color, 0.2, 0.3, BIOMES[biome].color),
+      markerMaterial = this.scenery('marker', '#485d67');
     for (let i = 0; i < 3; i++) {
       const x = id * 64 + 8 + i * 23,
         z = -5.5;
@@ -112,7 +200,8 @@ export class Terrain {
       group.add(rock);
     }
     if (biome === 1 || biome === 3) {
-      const crystalMaterial = mat(
+      const crystalMaterial = this.scenery(
+        'flora-' + biome,
         BIOMES[biome].color,
         0.55,
         0.25,
@@ -122,13 +211,35 @@ export class Terrain {
         const x = id * 64 + i * 11,
           z = -7 - randomAt(id + i) * 4,
           h = 2 + randomAt(id * 4 + i) * 7;
-        const crystal = new T.Mesh(
-          new T.ConeGeometry(biome === 1 ? 1.1 : 0.6, h, biome === 1 ? 5 : 7),
-          crystalMaterial,
-        );
-        crystal.position.set(x, baseHeight(x) + h / 2, z);
-        crystal.rotation.z = 0.15;
-        group.add(crystal);
+        if (biome === 1) {
+          for (let shard = 0; shard < 3; shard++) {
+            const height = h * (shard === 0 ? 1 : 0.5);
+            const crystal = new T.Mesh(
+              new T.ConeGeometry(shard === 0 ? 1.1 : 0.55, height, 5),
+              crystalMaterial,
+            );
+            crystal.position.set(
+              x + (shard - 1) * 0.8,
+              baseHeight(x) + height / 2,
+              z + shard * 0.35,
+            );
+            crystal.rotation.z = (shard - 1) * 0.22;
+            group.add(crystal);
+          }
+        } else {
+          const stem = new T.Mesh(new T.CylinderGeometry(0.15, 0.4, h * 0.65, 7), markerMaterial);
+          stem.position.set(x, baseHeight(x) + h * 0.325, z);
+          group.add(stem);
+          const cap = new T.Mesh(new T.SphereGeometry(1.3, 12, 8), crystalMaterial);
+          cap.scale.set(1, 0.35, 0.85);
+          cap.position.set(x, baseHeight(x) + h * 0.65, z);
+          group.add(cap);
+          for (let spore = 0; spore < 3; spore++) {
+            const bulb = new T.Mesh(new T.IcosahedronGeometry(0.09, 0), crystalMaterial);
+            bulb.position.set(x + (spore - 1) * 1.2, baseHeight(x) + h * 0.7 + spore * 0.6, z);
+            group.add(bulb);
+          }
+        }
       }
     }
     if (biome === 2) {
@@ -136,23 +247,43 @@ export class Terrain {
         group,
         [64, 0.1, 24],
         [id * 64 + 32, -6, 0],
-        mat('#ff5825', 0.1, 0.4, '#e84008'),
+        this.scenery('lava', '#ff5825', 0.1, 0.4, '#e84008'),
       );
       lava.receiveShadow = false;
     }
     if (biome === 4) {
-      const towerMaterial = mat('#28303d', 0.7, 0.4);
-      for (let i = 0; i < 4; i++) box(group, [2, 12, 2], [id * 64 + i * 18, 3, -10], towerMaterial);
+      const towerMaterial = this.scenery('tower', '#28303d', 0.7, 0.4);
+      for (let i = 0; i < 4; i++) {
+        const x = id * 64 + i * 18;
+        box(group, [2, 12, 2], [x, 3, -10], towerMaterial);
+        box(group, [3.2, 0.6, 2.6], [x, 8, -10], towerMaterial);
+        box(group, [2.05, 0.14, 2.05], [x, 6.7, -10], accent);
+        box(group, [0.15, 4, 0.1], [x + 0.65, 2, -8.95], accent);
+        box(group, [16, 0.6, 1], [x + 8, 7.4, -11], towerMaterial);
+      }
     }
     // The deformable surface remains independent from decorative batches.
     batchStaticMeshes(group, new Set([mesh]));
-    this.scene.add(group);
-    const collider = this.world.createCollider(RAPIER.ColliderDesc.trimesh(v, ix).setFriction(0.8));
-    this.chunks.set(id, { id, group, mesh, collider, vertices: v, indices: ix, version: 0 });
+    const collider = this.world.createCollider(
+      RAPIER.ColliderDesc.trimesh(v, ix).setFriction(0.8).setEnabled(false),
+    );
+    return {
+      id,
+      group,
+      mesh,
+      vertices: v,
+      original: v.slice(),
+      indices: ix,
+      version: 0,
+      collider,
+      baseCollider: collider,
+    };
   }
   carve(x: number, y: number, radius = 5, depth = 5) {
+    const generation = this.generation;
     this.queue = this.queue
       .then(async () => {
+        if (this.disposed || generation !== this.generation) return;
         const chunks = [...this.chunks.values()].filter(
           (chunk) => chunk.id * 64 <= x + radius && (chunk.id + 1) * 64 >= x - radius,
         );
@@ -162,7 +293,7 @@ export class Terrain {
             vertices: await this.compute.carve(chunk.vertices, x, y, radius, depth),
           })),
         );
-        if (this.disposed) return;
+        if (this.disposed || generation !== this.generation) return;
         const live = edits.filter(
           ({ chunk, vertices }) =>
             this.chunks.get(chunk.id) === chunk &&
@@ -188,13 +319,16 @@ export class Terrain {
         // All brush jobs finish before any surface changes. Commit the mesh/collider
         // pair for every surviving chunk in one task, retaining GPU vertex buffers.
         for (const { chunk, vertices, collider } of replacements) {
-          this.world.removeCollider(chunk.collider, true);
+          if (chunk.collider === this.prepared.get(chunk.id)?.baseCollider)
+            chunk.collider.setEnabled(false);
+          else this.world.removeCollider(chunk.collider, true);
           chunk.collider = collider;
           chunk.vertices.set(vertices);
           chunk.mesh.geometry.getAttribute('position').needsUpdate = true;
           chunk.mesh.geometry.computeVertexNormals();
           chunk.mesh.geometry.computeBoundingSphere();
           chunk.version++;
+          this.dirty.add(chunk.id);
         }
       })
       .catch((error) => console.warn('Terrain brush failed', error));
@@ -210,17 +344,46 @@ export class Terrain {
       chunk.vertices[(i * 9 + 4) * 3 + 1] * (1 - t) + chunk.vertices[((i + 1) * 9 + 4) * 3 + 1] * t
     );
   }
-  dispose() {
-    this.disposed = true;
+  reset() {
+    this.generation++;
     for (const c of this.chunks.values()) {
-      this.world.removeCollider(c.collider, true);
-      disposeGroup(c.group, this.retainedMaterials);
+      c.collider.setEnabled(false);
+      c.group.removeFromParent();
     }
     this.chunks.clear();
-    for (const material of this.materials.values()) {
-      disposeMaterial(material);
+    for (const id of this.dirty) {
+      const chunk = this.prepared.get(id);
+      if (!chunk) continue;
+      if (chunk.collider !== chunk.baseCollider) this.world.removeCollider(chunk.collider, true);
+      chunk.collider = chunk.baseCollider;
+      chunk.vertices.set(chunk.original);
+      chunk.mesh.geometry.getAttribute('position').needsUpdate = true;
+      chunk.mesh.geometry.computeVertexNormals();
+      chunk.mesh.geometry.computeBoundingSphere();
     }
+    this.dirty.clear();
+    this.update(0);
+  }
+  dispose() {
+    this.disposed = true;
+    const groups = new Set(
+      [...this.prepared.values(), ...this.chunks.values()].map((c) => c.group),
+    );
+    const colliders = new Set([...this.chunks.values()].map((c) => c.collider));
+    for (const c of this.prepared.values()) {
+      colliders.add(c.collider);
+      colliders.add(c.baseCollider);
+    }
+    colliders.forEach((collider) => this.world.removeCollider(collider, true));
+    groups.forEach((group) => disposeGroup(group, this.retainedMaterials));
+    this.sceneryRegions.forEach((group) => disposeGroup(group, this.retainedMaterials));
+    this.sceneryRegions.clear();
+    this.visibleRegions.clear();
+    this.chunks.clear();
+    this.prepared.clear();
+    this.retainedMaterials.forEach(disposeMaterial);
     this.materials.clear();
+    this.sceneryMaterials.clear();
     this.retainedMaterials.clear();
   }
 }

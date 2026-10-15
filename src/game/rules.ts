@@ -120,6 +120,8 @@ export interface Telemetry {
   reportClean: number;
   reportBonus: number;
   reportDamage: number;
+  checkpoint: number;
+  retries: number;
 }
 export function initialTelemetry(best = 0): Telemetry {
   return {
@@ -152,6 +154,8 @@ export function initialTelemetry(best = 0): Telemetry {
     reportClean: 0,
     reportBonus: 0,
     reportDamage: 0,
+    checkpoint: 0,
+    retries: 0,
   };
 }
 export function updateEnergy(s: Telemetry, input: Input, airborne: boolean, dt: number) {

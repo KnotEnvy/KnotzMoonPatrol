@@ -33,12 +33,28 @@ interface ActiveHazard extends HazardClock {
 }
 export class Hazards {
   private active = new Map<string, ActiveHazard>();
+  private prepared = new Map<string, ActiveHazard>();
   private retired = new Set<string>();
   private disposed = false;
   constructor(
     private scene: T.Scene,
     private world: RAPIER.World,
   ) {}
+  async prepare() {
+    for (const def of HAZARDS) {
+      if (this.disposed) return;
+      if (!this.prepared.has(def.id)) this.add(def);
+      const hazard = this.prepared.get(def.id)!;
+      if (hazard.collider) this.world.removeCollider(hazard.collider, true);
+      hazard.collider = undefined;
+      hazard.group.removeFromParent();
+      this.active.delete(def.id);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  }
+  get warmupGroups() {
+    return [...this.prepared.values()].map((h) => h.group);
+  }
   stream(x: number) {
     if (this.disposed) return;
     for (const def of HAZARDS)
@@ -52,13 +68,38 @@ export class Hazards {
     for (const [id, h] of this.active)
       if (h.def.x < x - 70 || h.def.x > x + 160) {
         if (h.collider) this.world.removeCollider(h.collider, true);
-        disposeGroup(h.group);
-        h.material.dispose();
+        h.collider = undefined;
+        h.group.removeFromParent();
         this.active.delete(id);
         this.retired.add(id);
       }
   }
   private add(def: HazardDefinition) {
+    const cached = this.prepared.get(def.id);
+    if (cached) {
+      Object.assign(cached, {
+        phase: 'idle',
+        remaining: 0,
+        hp: 4,
+        launched: false,
+        dropped: false,
+      });
+      cached.group.scale.setScalar(1);
+      cached.effect.position.set(0, 0, 0);
+      cached.effect.rotation.set(0, 0, 0);
+      cached.effect.scale.setScalar(1);
+      cached.effect.visible = !['vent', 'crystal', 'laser'].includes(def.kind);
+      cached.material.opacity = 0.65;
+      if (def.kind === 'plate')
+        cached.collider = this.world.createCollider(
+          RAPIER.ColliderDesc.cuboid(def.width / 2, 0.15, 4)
+            .setTranslation(def.x, cached.y, 0)
+            .setFriction(0.85),
+        );
+      this.scene.add(cached.group);
+      this.active.set(def.id, cached);
+      return;
+    }
     const group = new T.Group(),
       effect = new T.Group();
     const isGap = def.kind === 'plate' || def.kind === 'canopy';
@@ -210,6 +251,7 @@ export class Hazards {
       launched: false,
       dropped: false,
     });
+    this.prepared.set(def.id, this.active.get(def.id)!);
   }
   step(dt: number, rover: { x: number; y: number; contacts: Set<number> }, fx: HazardEffects) {
     for (const h of this.active.values()) {
@@ -373,14 +415,19 @@ export class Hazards {
   reset() {
     for (const h of this.active.values()) {
       if (h.collider) this.world.removeCollider(h.collider, true);
-      disposeGroup(h.group);
-      h.material.dispose();
+      h.collider = undefined;
+      h.group.removeFromParent();
     }
     this.active.clear();
     this.retired.clear();
   }
   dispose() {
     this.reset();
+    for (const h of this.prepared.values()) {
+      disposeGroup(h.group);
+      h.material.dispose();
+    }
+    this.prepared.clear();
     this.disposed = true;
   }
 }

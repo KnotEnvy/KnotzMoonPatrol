@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as T from 'three/webgpu';
 import { batchStaticMeshes, updateInstanceBatch } from '../src/game/render-batches';
-import { disposeGroup, makeRover } from '../src/game/models';
+import { disposeGroup, makeRover, updateWheelBatches } from '../src/game/models';
 
 describe('static rendering batches', () => {
   it('preserves transformed bounds, materials, shadows, and independently animated children', () => {
@@ -40,12 +40,22 @@ describe('static rendering batches', () => {
     expect(rover.flame.parent).toBe(rover.group);
     expect(rover.flame.visible).toBe(false);
     expect(rover.turret.parent).toBe(rover.group);
-    for (const wheel of rover.wheels) {
+    for (const [i, wheel] of rover.wheels.entries()) {
       expect(wheel.parent).toBe(rover.group);
-      expect(wheel.children.length).toBeLessThan(6);
-      const before = new T.Box3().setFromObject(wheel).getCenter(new T.Vector3());
+      const bounds = () => {
+        const result = new T.Box3(),
+          matrix = new T.Matrix4();
+        for (const batch of rover.wheelBatches) {
+          batch.getMatrixAt(i, matrix);
+          batch.geometry.computeBoundingBox();
+          result.union(batch.geometry.boundingBox!.clone().applyMatrix4(matrix));
+        }
+        return result.getCenter(new T.Vector3());
+      };
+      const before = bounds();
       wheel.position.y += 2;
-      const after = new T.Box3().setFromObject(wheel).getCenter(new T.Vector3());
+      updateWheelBatches(rover);
+      const after = bounds();
       expect(after.y - before.y).toBeCloseTo(2);
     }
     disposeGroup(rover.group);
