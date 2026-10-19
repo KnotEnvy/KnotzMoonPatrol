@@ -5,8 +5,27 @@ import { Graphics } from './graphics';
 import { BiomeLighting } from './lighting';
 import { loadGraphicsQuality, type GraphicsQuality } from './quality';
 import { Hazards, type HazardEffects } from './hazards';
-import { EncounterDirector, nextGap } from './route';
+import { EncounterDirector, nextGap, safeGroundPosition } from './route';
 import { JumpAssist, landingQuality, terrainPitch } from './movement';
+import { PatrolJump } from './patrol';
+import { EnemyModels } from './enemy-models';
+import {
+  AIR_LIMIT,
+  AIR_KIND_LIMITS,
+  AIR_HULL,
+  BOMB_WINDUP,
+  BOMB_GRAVITY,
+  BOMB_FALL_SPEED,
+  BOMB_LIMIT,
+  BOMB_RELEASE_GAP,
+  BOMB_TARGET_MEMORY,
+  isAirKind,
+  createFlight,
+  advanceFlight,
+  bombFallTime,
+  planBomb,
+  type AirFlight,
+} from './aerial';
 import { updateInstanceBatch } from './render-batches';
 import { initializePhysics } from './physics';
 import { TerrainCompute } from './terrain-compute';
@@ -19,7 +38,15 @@ import {
   surfaceRayDistance,
 } from './weapons';
 import { WeaponEffects } from './weapon-effects';
-import { makeRover, makeEnemy, makeBackdrop, mat, disposeGroup } from './models';
+import {
+  makeRover,
+  makeBackdrop,
+  mat,
+  disposeGroup,
+  updateSuspension,
+  updateWheelBatches,
+  updateParallax,
+} from './models';
 import {
   type Telemetry,
   type Input,
@@ -53,6 +80,8 @@ interface Enemy {
   maxHp: number;
   melt: number;
   melted: boolean;
+  flight?: AirFlight;
+  drop?: { x: number; remaining: number };
 }
 interface Shot {
   mesh: T.Object3D;
@@ -65,6 +94,7 @@ interface Shot {
   type: 'pulse' | 'flak' | 'seeker' | 'bomb' | 'seismic';
   damage: number;
   enemy: boolean;
+  impactX?: number;
 }
 interface Particle {
   x: number;
@@ -90,6 +120,7 @@ export class Game {
   state: Telemetry;
   loadout: Loadout = { ground: 'pulse', sky: 'flak' };
   overlayOpen = false;
+  radarObstacles: { left: number; right: number; top: number; bottom: number }[] = [];
   readonly audio = new Sound();
   readonly keys = new Set<string>();
   readonly touch = new Set<string>();
@@ -107,6 +138,8 @@ export class Game {
   private hazards!: Hazards;
   private director = new EncounterDirector();
   private jumpAssist = new JumpAssist();
+  private patrolJump = new PatrolJump();
+  private enemyModels = new EnemyModels();
   private launched = false;
   private landingBoost = 0;
   private tutorialStage = 0;
@@ -130,6 +163,9 @@ export class Game {
   private enemies: Enemy[] = [];
   private shots: Shot[] = [];
   private shotBatches!: [T.InstancedMesh, T.InstancedMesh];
+  private bombTargets!: T.InstancedMesh;
+  private bombCooldown = 0;
+  private lastBombTarget = -Infinity;
   private strikes: Strike[] = [];
   private particleMesh!: T.InstancedMesh;
   private particles: Particle[] = [];
@@ -158,15 +194,26 @@ export class Game {
   private trauma = 0;
   private reportMark = { time: 0, kills: 0, clean: 0, damage: 0 };
   private nextReport = 5;
+  private retryPoint?: { state: Telemetry; x: number; nextReport: number };
   private noticeUntil = 0;
   private rearCooldown = 0;
+  private lastBombAt = -Infinity;
   private padPause = false;
   private sectorBefore = 0;
   private bossSpawned = false;
   private fpsFrames = 0;
   private fpsTime = 0;
+  private strikeGeometry = new T.CylinderGeometry(0.08, 0.08, 40, 6);
+  private strikeMaterial = new T.MeshBasicMaterial({
+    color: '#ff5358',
+    transparent: true,
+    opacity: 0.6,
+  });
+  private initializing = true;
+  private released = false;
   private previous = new T.Vector3();
   private current = new T.Vector3();
+  private viewport = new T.Vector2();
   private resizeObserver?: ResizeObserver;
   private light = new T.DirectionalLight('#edf7ff', 4);
   constructor(
@@ -198,14 +245,11 @@ export class Game {
       await this.renderer.init();
       if (!('isWebGPUBackend' in this.renderer.backend)) this.renderer.shadowMap.enabled = false;
       if (this.disposed) {
-        this.renderer.dispose();
         return;
       }
       if ('device' in this.renderer.backend)
         await this.compute.init(this.renderer.backend.device as GPUDevice);
       if (this.disposed) {
-        this.compute.dispose();
-        this.renderer.dispose();
         return;
       }
       this.state.backend =
@@ -213,6 +257,7 @@ export class Game {
           ? 'WEBGPU'
           : 'WEBGL 2';
       this.host.appendChild(this.renderer.domElement);
+      this.renderer.domElement.style.visibility = 'hidden';
       this.renderer.domElement.setAttribute('aria-label', 'Moon Patrol lunar landscape and rover');
       this.scene.background = new T.Color(BIOMES[0].sky);
       this.scene.fog = new T.FogExp2(BIOMES[0].sky, 0.0022);
@@ -311,14 +356,151 @@ export class Game {
       this.particleMesh.frustumCulled = false;
       this.scene.add(this.particleMesh);
       this.weaponEffects = new WeaponEffects(this.scene);
+      const targetGeometry = new T.RingGeometry(3.7, 4, 32);
+      targetGeometry.rotateX(-Math.PI / 2);
+      this.bombTargets = new T.InstancedMesh(
+        targetGeometry,
+        new T.MeshBasicMaterial({
+          color: '#ffac63',
+          transparent: true,
+          opacity: 0.6,
+          depthWrite: false,
+          side: T.DoubleSide,
+        }),
+        BOMB_LIMIT + 1,
+      );
+      this.bombTargets.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      this.bombTargets.frustumCulled = false;
+      this.bombTargets.count = 0;
+      this.scene.add(this.bombTargets);
       for (let i = 0; i < 800; i++)
         this.particles.push({ x: 0, y: -100, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1 });
-      this.seedPreview();
       this.camera.position.set(7, 8.8, 32);
       this.camera.lookAt(9, 3.6, 0);
       this.resizeObserver = new ResizeObserver(() => this.resize());
       this.resizeObserver.observe(this.host);
       this.resize();
+      await this.terrain.prepare();
+      if (this.disposed) return;
+      await this.enemyModels.prepare();
+      if (this.disposed) return;
+      await this.hazards.prepare();
+      if (this.disposed) return;
+      // Precompile every enemy and biome shader before accepting gameplay input.
+      const groups = [
+        ...this.terrain.warmupGroups(),
+        ...this.enemyModels.warmupGroups,
+        ...this.hazards.warmupGroups,
+      ];
+      const culled = new Map<T.Object3D, boolean>();
+      const visibility = new Map<T.Object3D, boolean>();
+      const parents = groups.map((group) => group.parent);
+      for (const group of groups) {
+        this.scene.add(group);
+        group.traverse((object) => {
+          culled.set(object, object.frustumCulled);
+          visibility.set(object, object.visible);
+          object.visible = true;
+          object.frustumCulled = false;
+        });
+      }
+      try {
+        for (const batch of [
+          ...this.shotBatches,
+          this.particleMesh,
+          this.weaponEffects.energy,
+          this.weaponEffects.slag,
+          this.bombTargets,
+        ]) {
+          batch.count = 1;
+          batch.visible = true;
+          batch.instanceMatrix.needsUpdate = true;
+        }
+        await this.renderer.compileAsync(this.scene, this.camera);
+        this.graphics.render(0);
+        // Submit uploads and shadow pipelines behind the loading screen as well.
+        if ('device' in this.renderer.backend)
+          await (this.renderer.backend.device as GPUDevice).queue.onSubmittedWorkDone();
+        // Distant chunks are clipped after the vertex stage even with frustum culling
+        // disabled. Rasterize each biome in view so its first visible pixels do not
+        // trigger deferred driver work at a live sector boundary.
+        for (const group of groups) group.visible = false;
+        for (const view of this.terrain.warmupViews()) {
+          view.group.visible = true;
+          view.group.position.x = -view.origin;
+          this.graphics.render(0);
+          if ('device' in this.renderer.backend)
+            await (this.renderer.backend.device as GPUDevice).queue.onSubmittedWorkDone();
+          view.group.position.x = 0;
+          view.group.visible = false;
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+      } finally {
+        for (const view of this.terrain.warmupViews()) view.group.position.x = 0;
+        for (const batch of [
+          ...this.shotBatches,
+          this.particleMesh,
+          this.weaponEffects.energy,
+          this.weaponEffects.slag,
+          this.bombTargets,
+        ]) {
+          batch.count = 0;
+          batch.visible = false;
+        }
+        groups.forEach((group, i) => {
+          group.removeFromParent();
+          parents[i]?.add(group);
+        });
+        culled.forEach((value, object) => {
+          object.frustumCulled = value;
+        });
+        visibility.forEach((value, object) => {
+          object.visible = value;
+        });
+      }
+      if (this.disposed) return;
+      // Exercise populated, transformed batches in the ordinary scene too. Identity-only
+      // compilation does not cover every pipeline used by the first live impact.
+      this.state.phase = 'playing';
+      this.current.copy(this.body.translation());
+      this.previous.copy(this.current);
+      this.shoot('pulse', 8, 4, 0, 0, 0, false);
+      this.shoot('bomb', 12, 8, 0, 0, 0, true);
+      this.burst(10, 3, 16);
+      this.strike(18);
+      this.weaponEffects.melt(14, this.terrain.heightAt(14));
+      this.beam = { x: 3, y: 2, length: 8, active: true };
+      this.railCharge.update(true, false, 0.5);
+      for (let i = 0; i < 3; i++) {
+        this.render(FIXED_DT, {
+          brake: false,
+          boost: false,
+          jump: false,
+          fire: false,
+          vent: false,
+          pitch: 0,
+        });
+        this.graphics.render(0);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      if ('device' in this.renderer.backend)
+        await (this.renderer.backend.device as GPUDevice).queue.onSubmittedWorkDone();
+      this.clearEntities();
+      this.weaponEffects.reset();
+      this.stopWeapons();
+      this.state.phase = 'menu';
+      if (this.disposed) return;
+      this.seedPreview();
+      this.render(FIXED_DT, {
+        brake: false,
+        boost: false,
+        jump: false,
+        fire: false,
+        vent: false,
+        pitch: 0,
+      });
+      this.graphics.render(0);
+      this.renderer.domElement.style.visibility = '';
       window.addEventListener('keydown', this.keyDown);
       window.addEventListener('keyup', this.keyUp);
       window.addEventListener('blur', this.blur);
@@ -331,6 +513,9 @@ export class Game {
     } catch (e) {
       if (!this.disposed)
         this.onError(e instanceof Error ? e.message : 'Unable to initialize the renderer.');
+    } finally {
+      this.initializing = false;
+      if (this.disposed) this.dispose();
     }
   }
   private seedPreview() {
@@ -342,6 +527,7 @@ export class Game {
   private resize() {
     const w = this.host.clientWidth,
       h = this.host.clientHeight;
+    this.viewport.set(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
@@ -370,7 +556,8 @@ export class Game {
       return;
     }
     if (e.code === 'Enter' && ['menu', 'dead', 'complete'].includes(this.state.phase)) {
-      this.start();
+      if (this.state.phase === 'dead' && this.retryPoint) this.retryCheckpoint();
+      else this.start();
       return;
     }
     if (e.code === 'KeyM') {
@@ -411,6 +598,7 @@ export class Game {
   start(loadout?: Loadout) {
     if (!this.ready) return;
     if (loadout) this.loadout = loadout;
+    this.retryPoint = undefined;
     this.clearEntities();
     this.hazards.reset();
     this.director.reset();
@@ -418,9 +606,8 @@ export class Game {
     this.launched = false;
     this.landingBoost = 0;
     this.tutorialStage = 0;
-    this.terrain.dispose();
-    this.terrain = new Terrain(this.scene, this.world, this.compute);
-    this.terrain.update(0);
+    this.patrolJump.reset();
+    this.terrain.reset();
     this.state = {
       ...initialTelemetry(this.state.best),
       phase: 'playing',
@@ -452,6 +639,9 @@ export class Game {
     this.stopWeapons();
     this.accumulator = 0;
     this.rearCooldown = 0;
+    this.bombCooldown = 0;
+    this.lastBombTarget = -Infinity;
+    this.lastBombAt = -Infinity;
     this.keys.clear();
     this.touch.clear();
     this.announce('FIRST CONTACT · J TO FIRE / SPACE TO JUMP');
@@ -480,8 +670,58 @@ export class Game {
     this.state.capacitor = 100;
     this.state.heat = 0;
     this.state.lockout = 0;
+    this.state.checkpoint = this.state.sector;
+    this.retryPoint = {
+      state: { ...this.state, radar: [] },
+      x: safeGroundPosition(this.state.sector * SECTOR_LENGTH + 10),
+      nextReport: this.nextReport,
+    };
     this.stopWeapons();
     this.announce('ROVER SERVICED · ROUTE RESUMED');
+    this.emit();
+  }
+  retryCheckpoint() {
+    if (this.state.phase !== 'dead' || !this.retryPoint) return;
+    const saved = this.retryPoint,
+      retries = this.state.retries + 1;
+    this.start();
+    const { best, backend, quality, fps } = this.state;
+    this.retryPoint = saved;
+    this.state = {
+      ...saved.state,
+      best,
+      backend,
+      quality,
+      fps,
+      retries,
+      phase: 'playing',
+      hull: 100,
+      capacitor: 100,
+      heat: 0,
+      lockout: 0,
+      railCharge: 0,
+      beamActive: false,
+      radar: [],
+      warning: '',
+      distance: saved.x,
+      speed: 18,
+    };
+    this.terrain.update(saved.x);
+    this.hazards.stream(saved.x);
+    this.body.setTranslation({ x: saved.x, y: this.terrain.heightAt(saved.x) + 2, z: 0 }, true);
+    this.current.copy(this.body.translation());
+    this.previous.copy(this.current);
+    this.elapsed = saved.state.time;
+    this.nextReport = saved.nextReport;
+    this.sectorBefore = saved.state.sector;
+    this.reportMark = {
+      time: saved.state.time,
+      kills: saved.state.kills,
+      clean: saved.state.clean,
+      damage: 0,
+    };
+    this.camera.position.set(saved.x + 12, 10.2, 34);
+    this.announce('CHECKPOINT RECOVERY · ROVER REPAIRED · SCORE RESTORED');
     this.emit();
   }
   menu() {
@@ -549,10 +789,7 @@ export class Game {
       this.uiTime = 0;
       this.emit();
     }
-    this.graphics.render(
-      this.state.phase === 'playing' && input.boost && this.state.capacitor > 0,
-      this.trauma,
-    );
+    this.graphics.render(this.trauma);
     this.frame = requestAnimationFrame(this.tick);
   };
   private step(input: Input) {
@@ -582,12 +819,21 @@ export class Game {
     if (!grounded) this.airborneTime += dt;
     if (grounded && !this.lastGrounded && this.airborneTime > 0.3) {
       const angle = 2 * Math.atan2(this.body.rotation().z, this.body.rotation().w);
-      if (landingQuality(angle, slope, v.y, this.airborneTime, this.launched)) {
+      const clearance = this.patrolJump.land(p.x);
+      const clean = landingQuality(angle, slope, v.y, this.airborneTime, this.launched);
+      if (clean) {
         s.clean++;
         s.score += 250;
         this.landingBoost = 1.2;
         this.announce('CLEAN LANDING +250 · MOMENTUM BOOST');
         this.audio.tone(660, 0.15, 'sine', 0.2);
+      }
+      if (clearance > 0) {
+        s.score += clearance;
+        this.announce(
+          clean ? `CLEAN LANDING +250 · CLEARANCE +${clearance}` : `PATROL CLEARANCE +${clearance}`,
+        );
+        if (!clean) this.audio.tone(880, 0.12, 'sine', 0.16);
       }
       this.trauma = Math.min(1, this.airborneTime * 0.15);
       this.burst(p.x, p.y - 0.6, 14);
@@ -602,6 +848,7 @@ export class Game {
     this.body.applyImpulse({ x: acceleration * this.body.mass() * dt, y: 0, z: 0 }, true);
     if (this.jumpAssist.update(input.jump, grounded, dt)) {
       this.launched = true;
+      this.patrolJump.launch(p.x);
       this.body.applyImpulse({ x: 0, y: this.body.mass() * 11.5, z: 0 }, true);
       this.audio.jump();
       this.burst(p.x, p.y - 1, 24);
@@ -618,6 +865,7 @@ export class Game {
     this.world.step();
     this.current.copy(this.body.translation());
     if (this.current.y < -5.5) {
+      this.patrolJump.reset();
       this.hurt(35);
       if (s.phase === 'playing') {
         let x = this.current.x + 14;
@@ -642,6 +890,7 @@ export class Game {
     this.terrain.update(this.current.x);
     this.invulnerable = Math.max(0, this.invulnerable - dt);
     this.rearCooldown = Math.max(0, this.rearCooldown - dt);
+    this.bombCooldown = Math.max(0, this.bombCooldown - dt);
     this.fireCooldown -= dt;
     this.skyCooldown -= dt;
     this.weaponEffects.step(dt);
@@ -661,12 +910,20 @@ export class Game {
       this.wave();
       this.spawnAt = this.elapsed + 0.1;
     }
-    if (this.tutorialStage === 0 && s.distance > 60 && s.distance < 105) {
+    if (this.tutorialStage === 0 && s.distance > 20 && s.distance < 75) {
       this.tutorialStage = 1;
+      this.announce('ROCK AHEAD · J TO SHOOT / SPACE TO CLEAR');
+    }
+    if (this.tutorialStage < 2 && s.distance > 78 && s.distance < 105) {
+      this.tutorialStage = 2;
       this.announce('CHASM AHEAD · TAP SPACE / HOLD TO HOVER');
     }
-    if (this.tutorialStage === 1 && s.distance > 185) {
-      this.tutorialStage = 2;
+    if (this.tutorialStage < 3 && s.distance > 130 && s.distance < 185) {
+      this.tutorialStage = 3;
+      this.announce('SAUCERS INBOUND · J FIRES FORWARD + UP');
+    }
+    if (this.tutorialStage < 4 && s.distance > 185) {
+      this.tutorialStage = 4;
       this.announce('SHIFT FOR OVERDRIVE · K TO VENT WEAPONS');
     }
     if (s.sector !== this.sectorBefore) {
@@ -705,9 +962,7 @@ export class Game {
           ? 'HULL CRITICAL'
           : this.strikes.some((x) => !x.fired)
             ? 'ORBITAL STRIKE · CHANGE SPEED'
-            : this.enemies.some((e) => e.kind === 'bomber' && Math.abs(e.x - p.x) < 40)
-              ? 'HEAVY BOMBER INBOUND'
-              : '';
+            : '';
   }
   private stopWeapons() {
     this.railCharge.cancel();
@@ -719,7 +974,7 @@ export class Game {
     this.state.beamActive = false;
   }
   private firingAngle(x: number, y: number) {
-    let target: Enemy | undefined,
+    let target: { x: number; y: number } | undefined,
       nearest = Infinity;
     for (const e of this.enemies) {
       if (e.hp <= 0 || e.y <= 4 || Math.abs(e.x - x) >= 45) continue;
@@ -729,8 +984,17 @@ export class Game {
         target = e;
       }
     }
+    for (const s of this.shots) {
+      if (!s.active || !s.enemy || s.type !== 'bomb' || s.y <= y || Math.abs(s.x - x) >= 40)
+        continue;
+      const distance = Math.hypot(s.x - x, s.y - y) * 0.75;
+      if (distance < nearest) {
+        nearest = distance;
+        target = s;
+      }
+    }
     return target
-      ? clamp(Math.atan2(target.y - y, target.x - x), Math.PI / 4, (Math.PI * 3) / 4)
+      ? clamp(Math.atan2(target.y - y, target.x - x), Math.PI / 6, (Math.PI * 5) / 6)
       : Math.PI / 2;
   }
   private enemyRadius(e: Enemy) {
@@ -775,8 +1039,14 @@ export class Game {
         target = e;
       }
     }
+    const bomb = this.bombOnRay(x, y, 1, 0, length);
+    if (bomb) {
+      length = bomb.distance;
+      target = undefined;
+    }
     const damage = (6 + Math.min(1.5, this.beamTime) * 2) * dt;
-    if (target) {
+    if (bomb) this.interceptBomb(bomb.shot);
+    else if (target) {
       target.hp -= damage;
       if (target.kind === 'rock') {
         target.melt = clamp(1 - target.hp / target.maxHp, 0, 1);
@@ -812,6 +1082,14 @@ export class Game {
     const core = this.hazards.coreOnRay(x, y, dx, dy, length);
     if (core) length = core.distance;
     const damage = 3 + strength * 7;
+    for (const s of this.shots)
+      if (
+        s.active &&
+        s.enemy &&
+        s.type === 'bomb' &&
+        rayCircleDistance(x, y, dx, dy, length, s.x, s.y, 0.8) !== null
+      )
+        this.interceptBomb(s);
     for (const e of this.enemies)
       if (
         e.hp > 0 &&
@@ -842,7 +1120,15 @@ export class Game {
         heat = w === 'pulse' ? 7 : 20;
       if (addHeat(s, heat)) {
         const damage = w === 'pulse' ? 1 : 5;
-        this.shoot(w, p.x + 2.6, p.y + 0.45, 70, w === 'seismic' ? -4 : 0, damage, false);
+        this.shoot(
+          w,
+          p.x + 2.6,
+          p.y + 0.45,
+          70 + this.body.linvel().x,
+          w === 'seismic' ? -4 : 0,
+          damage,
+          false,
+        );
         this.fireCooldown = w === 'pulse' ? 0.15 : 0.7;
         this.audio.shot();
       }
@@ -858,12 +1144,12 @@ export class Game {
       const w = this.loadout.sky;
       const angle = this.firingAngle(p.x - 0.6, p.y + 2.3);
       if (addHeat(s, w === 'seeker' ? 12 : 6)) {
-        for (let i = 0; i < (w === 'seeker' ? 4 : 1); i++)
+        for (let i = 0; i < (w === 'seeker' ? 2 : 1); i++)
           this.shoot(
             w,
             p.x - 0.6,
             p.y + 2.3,
-            Math.cos(angle + (i - 1.5) * (w === 'seeker' ? 0.07 : 0)) * 40,
+            Math.cos(angle + (i - 0.5) * (w === 'seeker' ? 0.07 : 0)) * 40 + this.body.linvel().x,
             Math.sin(angle) * 40,
             2,
             false,
@@ -899,37 +1185,101 @@ export class Game {
       vy,
       damage,
       life: enemy ? 5 : type === 'flak' ? 0.62 : 2,
+      impactX: undefined,
     });
     shot.mesh.visible = true;
     shot.mesh.position.set(x, y, 0.2);
-    shot.mesh.rotation.z = Math.atan2(vy, vx);
-    shot.mesh.scale.set(0.45, 0.16, 0.16);
+    shot.mesh.rotation.z = Math.atan2(vy, vx) - (enemy && type === 'bomb' ? Math.PI / 2 : 0);
+    if (enemy && type === 'bomb') shot.mesh.scale.set(0.36, 0.62, 0.36);
+    else shot.mesh.scale.set(0.45, 0.16, 0.16);
+    return shot;
+  }
+  private bombOnRay(x: number, y: number, dx: number, dy: number, range: number) {
+    let nearest: { shot: Shot; distance: number } | undefined;
+    for (const shot of this.shots) {
+      if (!shot.active || !shot.enemy || shot.type !== 'bomb') continue;
+      const distance = rayCircleDistance(x, y, dx, dy, range, shot.x, shot.y, 0.8);
+      if (distance !== null && (!nearest || distance < nearest.distance))
+        nearest = { shot, distance };
+    }
+    return nearest;
+  }
+  private interceptBomb(shot: Shot) {
+    if (!shot.active) return;
+    shot.active = false;
+    shot.life = 0;
+    shot.mesh.visible = false;
+    this.state.score += 50;
+    this.burst(shot.x, shot.y, 12);
+    this.audio.tone(
+      740,
+      0.08,
+      'triangle',
+      0.12,
+      clamp((shot.x - this.current.x) / 35, -1, 1),
+      1050,
+    );
   }
   private updateShots(dt: number) {
     const p = this.current;
     for (const s of this.shots) {
       if (!s.active) continue;
+      const beforeX = s.x,
+        beforeY = s.y;
       s.life -= dt;
       if (s.type === 'seeker') {
-        const target = this.enemies
-          .filter((e) => e.y > 3 && e.hp > 0)
-          .sort((a, b) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(b.x - s.x, b.y - s.y))[0];
+        let target: { x: number; y: number } | undefined,
+          nearest = Infinity;
+        for (const e of this.enemies) {
+          if (e.hp <= 0 || e.y <= 3) continue;
+          const distance = Math.hypot(e.x - s.x, e.y - s.y);
+          if (distance < nearest) {
+            target = e;
+            nearest = distance;
+          }
+        }
+        for (const bomb of this.shots) {
+          if (!bomb.active || !bomb.enemy || bomb.type !== 'bomb') continue;
+          const distance = Math.hypot(bomb.x - s.x, bomb.y - s.y) * 0.75;
+          if (distance < nearest) {
+            target = bomb;
+            nearest = distance;
+          }
+        }
         if (target) {
           const a = Math.atan2(target.y - s.y, target.x - s.x);
-          s.vx += (Math.cos(a) * 45 - s.vx) * dt * 5;
+          s.vx += (Math.cos(a) * 45 + this.state.speed - s.vx) * dt * 5;
           s.vy += (Math.sin(a) * 45 - s.vy) * dt * 5;
         }
       }
-      if (s.enemy) s.vy -= dt * 8;
+      if (s.enemy) s.vy -= dt * BOMB_GRAVITY;
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.mesh.position.set(s.x, s.y, 0.2);
-      s.mesh.rotation.z = Math.atan2(s.vy, s.vx);
+      s.mesh.rotation.z = Math.atan2(s.vy, s.vx) - (s.enemy && s.type === 'bomb' ? Math.PI / 2 : 0);
+      if (!s.enemy && s.life > 0) {
+        const distance = Math.hypot(s.x - beforeX, s.y - beforeY);
+        if (distance > 0) {
+          const bomb = this.bombOnRay(
+            beforeX,
+            beforeY,
+            (s.x - beforeX) / distance,
+            (s.y - beforeY) / distance,
+            distance,
+          );
+          if (bomb) {
+            this.interceptBomb(bomb.shot);
+            s.x = beforeX + ((s.x - beforeX) / distance) * bomb.distance;
+            s.y = beforeY + ((s.y - beforeY) / distance) * bomb.distance;
+            s.life = 0;
+          }
+        }
+      }
       if (s.enemy && Math.hypot(s.x - p.x, s.y - p.y) < 2) {
         this.hurt(16);
         s.life = 0;
       }
-      if (!s.enemy) {
+      if (!s.enemy && s.life > 0) {
         const hit = this.hazards.strikeCore(s.x, s.y, s.damage, this.hazardEffects);
         if (hit) {
           if (hit === 'destroyed') this.state.score += 150;
@@ -949,7 +1299,7 @@ export class Game {
         }
       const surface = this.hazards.surfaceHeight(s.x, this.terrain.heightAt(s.x));
       if (s.y < surface + 0.15) {
-        if (s.enemy) {
+        if (s.enemy && s.type === 'bomb') {
           this.hazards.fractureNear(s.x, 5);
           this.terrain.carve(s.x, surface, 5, 4);
           this.burst(s.x, s.y, 55);
@@ -967,6 +1317,14 @@ export class Game {
         if (s.type === 'flak') {
           this.burst(s.x, s.y, 16);
           for (const e of this.enemies) if (Math.hypot(e.x - s.x, e.y - s.y) < 5) e.hp -= 2;
+          for (const bomb of this.shots)
+            if (
+              bomb.active &&
+              bomb.enemy &&
+              bomb.type === 'bomb' &&
+              Math.hypot(bomb.x - s.x, bomb.y - s.y) < 5
+            )
+              this.interceptBomb(bomb);
         }
         s.active = false;
         s.mesh.visible = false;
@@ -974,19 +1332,18 @@ export class Game {
     }
   }
   private spawn(kind: EnemyKind, x: number, y: number) {
-    const group = makeEnemy(kind);
+    if (isAirKind(kind)) {
+      const air = this.enemies.filter((e) => e.hp > 0 && isAirKind(e.kind));
+      if (
+        air.length >= AIR_LIMIT ||
+        air.filter((e) => e.kind === kind).length >= AIR_KIND_LIMITS[kind]
+      )
+        return;
+    }
+    const group = this.enemyModels.acquire(kind);
     group.position.set(x, y, 0);
     this.scene.add(group);
-    const hp =
-      kind === 'boss'
-        ? 100
-        : kind === 'bomber'
-          ? 10
-          : kind === 'rock'
-            ? 3
-            : kind === 'hunter'
-              ? 7
-              : 2;
+    const hp = kind === 'boss' ? 100 : isAirKind(kind) ? AIR_HULL[kind] : kind === 'rock' ? 3 : 2;
     this.enemies.push({
       group,
       kind,
@@ -1000,6 +1357,7 @@ export class Game {
       seed: x,
       diving: false,
       collided: false,
+      flight: isAirKind(kind) ? createFlight(x, y, this.current.x) : undefined,
     });
   }
   private wave() {
@@ -1021,41 +1379,101 @@ export class Game {
     const p = this.current;
     for (const e of this.enemies) {
       e.timer += dt;
-      const prevX = e.x;
-      if (e.kind === 'drone') {
-        e.x -= dt * (e.diving ? 22 : 6);
-        e.y += Math.cos(this.elapsed * 2 + e.seed) * dt * 2;
-        if (e.diving) e.y += (p.y - e.y) * dt * 1.8;
+      if (e.flight && isAirKind(e.kind) && e.hp > 0) {
+        advanceFlight(e.flight, e.kind, e.seed, p.x, dt);
+        e.x = e.flight.x;
+        e.y = e.flight.y;
+        e.group.rotation.z = e.flight.bank;
+        if (e.kind === 'drone') e.group.rotation.y += dt * 0.7;
       }
-      if (e.kind === 'bomber' || e.kind === 'boss') {
-        e.x = e.kind === 'boss' ? p.x + 13 : e.x - dt * 2;
+      if (e.kind === 'boss') {
+        e.x = p.x + 13;
         e.y = 14 + Math.sin(this.elapsed * 0.8 + e.seed);
-        if (e.timer > (e.kind === 'boss' ? 1.25 : 2.4) && Math.abs(e.x - p.x) < 55) {
-          this.shoot('bomb', e.x, e.y, -2, -3, 1, true);
-          e.timer = 0;
+        this.state.boss = Math.max(0, e.hp);
+      }
+      if (e.kind === 'drone' || e.kind === 'bomber' || e.kind === 'boss') {
+        let startedDrop = false;
+        const ready = e.kind === 'boss' || e.flight?.phase === 'patrol';
+        if (!ready || e.hp <= 0) e.drop = undefined;
+        const cadence = e.kind === 'boss' ? 1.25 : e.kind === 'bomber' ? 3.6 : 4.8;
+        if (
+          ready &&
+          e.hp > 0 &&
+          !e.drop &&
+          e.timer >= cadence &&
+          this.bombCooldown === 0 &&
+          this.shots.filter((s) => s.active && s.enemy && s.type === 'bomb').length < BOMB_LIMIT
+        ) {
+          const drop = planBomb(p.x, this.state.speed, e.y, (x) =>
+            this.hazards.surfaceHeight(x, this.terrain.heightAt(x)),
+          );
+          if (
+            Math.abs(drop.x - this.lastBombTarget) >= 14 ||
+            this.elapsed - this.lastBombAt >= BOMB_TARGET_MEMORY
+          ) {
+            e.drop = drop;
+            startedDrop = true;
+            this.lastBombTarget = drop.x;
+            this.lastBombAt = this.elapsed;
+            this.bombCooldown = BOMB_WINDUP + BOMB_RELEASE_GAP;
+            this.audio.tone(620, 0.12, 'triangle', 0.1, clamp((e.x - p.x) / 35, -1, 1), 900);
+          }
         }
-        if (e.kind === 'boss') this.state.boss = Math.max(0, e.hp);
+        if (e.drop && !startedDrop) {
+          e.drop.remaining -= dt;
+          if (e.drop.remaining <= 0) {
+            const fall = bombFallTime(
+              e.y,
+              this.hazards.surfaceHeight(e.drop.x, this.terrain.heightAt(e.drop.x)),
+            );
+            const shot = this.shoot(
+              'bomb',
+              e.x,
+              e.y,
+              (e.drop.x - e.x) / fall,
+              BOMB_FALL_SPEED,
+              1,
+              true,
+            );
+            if (shot) shot.impactX = e.drop.x;
+            e.drop = undefined;
+            e.timer = 0;
+          }
+        }
+        const light = e.group.userData.warningLight as T.MeshStandardMaterial;
+        light.emissiveIntensity = e.drop ? 3 + Math.sin(this.elapsed * 35) * 1.5 : 1.3;
       }
       if (e.kind === 'hunter') {
-        e.x -= dt * 3;
-        e.y = 10 + Math.sin(this.elapsed);
-        if (Math.abs(e.x - p.x) < 4 && !boost) {
+        const beam = e.group.userData.tractorBeam as T.Mesh<
+          T.CylinderGeometry,
+          T.MeshBasicMaterial
+        >;
+        const pulling =
+          e.hp > 0 && e.flight?.phase === 'patrol' && Math.abs(e.x - p.x) < 4 && !boost;
+        beam.material.opacity = pulling ? 0.24 : 0.045;
+        if (pulling) {
           this.body.applyImpulse({ x: 0, y: this.body.mass() * 22 * dt, z: 0 }, true);
           this.announce('TRACTOR BEAM · BOOST TO ESCAPE');
         }
       }
       if (e.kind === 'interceptor') {
-        e.x -= dt * 30;
-        if (e.timer > 1 && e.timer < 2) {
-          this.strike(p.x + 20);
-          e.timer = 3;
+        if (
+          e.hp > 0 &&
+          e.flight?.phase === 'patrol' &&
+          e.timer > 5.5 &&
+          this.bombCooldown === 0 &&
+          !this.strikes.some((s) => !s.fired)
+        ) {
+          this.strike(p.x + clamp(this.state.speed * 1.5 + 12, 26, 66));
+          e.timer = 0;
+          this.bombCooldown = BOMB_RELEASE_GAP;
         }
       }
       if (e.kind === 'skimmer') {
         e.x -= dt * 8;
         e.y = this.terrain.heightAt(e.x) + 0.6;
         if (e.timer > 2 && e.x - p.x < 40) {
-          this.shoot('bomb', e.x, e.y + 1, -30, 3, 1, true);
+          this.shoot('pulse', e.x, e.y + 1, -30, 3, 1, true);
           e.timer = 0;
         }
       }
@@ -1073,17 +1491,21 @@ export class Game {
         for (const child of e.group.children)
           if (child instanceof T.Mesh && child.material instanceof T.MeshStandardMaterial) {
             child.material.emissive.copy(this.meltColor);
-            child.material.emissiveIntensity = e.melt * 2;
+            child.material.emissiveIntensity = Math.max(
+              child.material.name === 'mineral-seam' ? 0.3 : 0,
+              e.melt * 2,
+            );
             child.material.roughness = 0.9 - e.melt * 0.5;
           }
       }
-      if (e.kind === 'drone') e.group.rotation.z = (e.x - prevX) * 0.4;
+      if (e.hp > 0 && !e.collided && this.launched)
+        this.patrolJump.cross(e, e.kind, e.x, e.y, p.x, p.y);
       if (
         e.hp > 0 &&
         Math.hypot(e.x - p.x, e.y - p.y) < (e.kind === 'rock' ? 2.6 - e.melt * 0.7 : 2.3)
       ) {
         e.collided = true;
-        this.hurt(e.kind === 'rock' ? 18 : 22);
+        this.hurt(e.kind === 'rock' ? 18 : isAirKind(e.kind) ? 10 : 22);
         e.hp = 0;
       }
       if (e.hp <= 0) {
@@ -1105,17 +1527,14 @@ export class Game {
     }
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
-      if (e.hp <= 0 || e.x < p.x - 25) {
-        disposeGroup(e.group);
+      if (e.hp <= 0 || e.flight?.phase === 'gone' || (!e.flight && e.x < p.x - 25)) {
+        this.enemyModels.release(e.group);
         this.enemies.splice(i, 1);
       }
     }
   }
   private strike(x: number) {
-    const mesh = new T.Mesh(
-      new T.CylinderGeometry(0.08, 0.08, 40, 6),
-      new T.MeshBasicMaterial({ color: '#ff5358', transparent: true, opacity: 0.6 }),
-    );
+    const mesh = new T.Mesh(this.strikeGeometry, this.strikeMaterial);
     mesh.position.set(x, 18, 0);
     this.scene.add(mesh);
     this.strikes.push({ x, timer: 1.5, mesh, fired: false });
@@ -1130,15 +1549,15 @@ export class Game {
         s.timer = 0.3;
         this.burst(s.x, 1, 65);
         this.hazards.fractureNear(s.x, 5);
-        this.terrain.carve(s.x, this.terrain.heightAt(s.x), 5, 6);
-        if (Math.abs(this.current.x - s.x) < 5) this.hurt(35);
+        this.terrain.carve(s.x, this.terrain.heightAt(s.x), 5, 4);
+        if (Math.abs(this.current.x - s.x) < 5) this.hurt(25);
         this.audio.blast();
         this.trauma = 0.7;
       }
     }
     for (let i = this.strikes.length - 1; i >= 0; i--)
       if (this.strikes[i].timer <= 0 && this.strikes[i].fired) {
-        disposeGroup(this.strikes[i].mesh);
+        this.strikes[i].mesh.removeFromParent();
         this.strikes.splice(i, 1);
       }
   }
@@ -1154,6 +1573,7 @@ export class Game {
   }
   private hurt(amount: number) {
     if (this.invulnerable > 0) return;
+    this.patrolJump.reset();
     this.state.hull = Math.max(0, this.state.hull - amount);
     this.reportMark.damage += amount;
     this.invulnerable = 1.2;
@@ -1241,6 +1661,8 @@ export class Game {
       this.rover.wheels[i].position.y = -0.1 - (this.vehicle.wheelSuspensionLength(i) ?? 0.6);
       this.rover.wheels[i].rotation.z = -(this.vehicle.wheelRotation(i) ?? 0);
     }
+    updateSuspension(this.rover);
+    updateWheelBatches(this.rover);
     const boost = this.state.phase === 'playing' && input.boost && this.state.capacitor > 0;
     this.rover.flame.visible = boost;
     this.rover.flame.scale.x = 0.8 + Math.random() * 0.7;
@@ -1250,26 +1672,23 @@ export class Game {
       this.railFlash.life > 0 ? this.railFlash.angle : undefined,
     );
     this.rover.turret.rotation.z = railAim.angle - Math.PI / 2 - railAim.bodyAngle;
-    const fov = menu ? 45 : boost ? 65 : 48;
-    this.camera.fov = T.MathUtils.lerp(this.camera.fov, fov, 1 - Math.exp(-dt * 3));
+    this.camera.fov = menu ? 45 : 48;
     this.camera.updateProjectionMatrix();
     const narrow = this.camera.aspect < 1;
-    const distance = (menu ? 32 : 34) * (narrow ? Math.min(2.2, 1 / this.camera.aspect) : 1);
+    const distance = (menu ? 25 : 34) * (narrow ? Math.min(2.2, 1 / this.camera.aspect) : 1);
     const targetPos = new T.Vector3(
-      p.x + (narrow ? (boost ? 9 : 5) : menu ? 7 : boost ? 20 : 12),
-      menu ? 8.8 : 10.2,
+      p.x + (menu ? (narrow ? -9 : -10) : narrow ? 5 : 12),
+      menu ? 7.8 : 10.2,
       distance,
     );
     this.camera.position.lerp(targetPos, 1 - Math.exp(-dt * 5));
+    // Physics interpolation already smooths travel; speed-dependent follow lag would reframe taps.
+    this.camera.position.x = targetPos.x;
     this.trauma = Math.max(0, this.trauma - dt * 2);
     this.camera.position.y += Math.sin(this.elapsed * 75) * this.trauma * 0.15;
-    this.camera.lookAt(
-      p.x + (narrow ? (menu ? 2 : boost ? 11 : 6) : menu ? 9 : boost ? 22 : 14),
-      3.6,
-      0,
-    );
+    this.camera.lookAt(p.x + (menu ? (narrow ? -7 : -8) : narrow ? 6 : 14), 3.6, 0);
     this.camera.updateMatrixWorld();
-    const threats = this.hazards.threats(p.x);
+    const threats = this.hazards.threats(p.x).map((t) => ({ ...t, priority: t.urgent ? 1 : 3 }));
     const gap = nextGap(p.x);
     if (gap - p.x < 75 && !threats.some((t) => Math.abs(t.x - gap) < 15))
       threats.push({
@@ -1278,6 +1697,7 @@ export class Game {
         y: 2,
         label: 'CHASM · JUMP',
         urgent: gap - p.x < 28,
+        priority: gap - p.x < 28 ? 0 : 2,
       });
     for (const strike of this.strikes)
       if (!strike.fired && strike.x > p.x - 5 && strike.x < p.x + 75)
@@ -1287,38 +1707,109 @@ export class Game {
           y: 9,
           label: 'ORBITAL STRIKE ' + strike.timer.toFixed(1) + 's',
           urgent: true,
+          priority: 0,
         });
+    // Aircraft silhouettes and their world-space effects identify enemies. Scanner cards
+    // are reserved for actionable terrain, strike, and bomb cues so they cannot hide ships.
+    let targetCount = 0;
+    const markBomb = (id: string, x: number, label: string) => {
+      if (x < p.x - 6 || x > p.x + 125) return;
+      const y = this.hazards.surfaceHeight(x, this.terrain.heightAt(x));
+      if (targetCount < this.bombTargets.instanceMatrix.count) {
+        this.dummy.position.set(x, y + 0.12, 0);
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar(0.95 + Math.sin(this.elapsed * 9) * 0.05);
+        this.dummy.updateMatrix();
+        this.bombTargets.setMatrixAt(targetCount++, this.dummy.matrix);
+      }
+      threats.push({ id, x, y: y + 2, label, urgent: true, priority: 0 });
+    };
     for (const e of this.enemies)
-      if (
-        e.hp > 0 &&
-        e.x > p.x + 8 &&
-        e.x < p.x + 75 &&
-        e.y > 5 &&
-        ['bomber', 'hunter', 'interceptor', 'boss'].includes(e.kind)
-      )
-        threats.push({
-          id: e.kind + e.seed,
-          x: e.x,
-          y: e.y + 2,
-          label: e.kind === 'boss' ? 'MOTHERSHIP' : e.kind.toUpperCase(),
-          urgent: e.x - p.x < 25,
-        });
+      if (e.hp > 0 && e.drop) markBomb('drop-' + e.seed, e.drop.x, 'BOMB TARGET');
+    for (const [i, shot] of this.shots.entries())
+      if (shot.active && shot.enemy && shot.type === 'bomb' && shot.impactX !== undefined)
+        markBomb('bomb-' + i, shot.impactX, 'BOMB · FIRE / JUMP');
+    this.bombTargets.count = targetCount;
+    this.bombTargets.visible = targetCount > 0;
+    if (targetCount > 0) this.bombTargets.instanceMatrix.needsUpdate = true;
+    const placed: { x: number; y: number }[] = [];
+    const compactRadar = this.viewport.x <= 600 || this.viewport.y <= 500;
+    const labelWidth = compactRadar ? 150 : 190,
+      labelHeight = compactRadar ? 40 : 48;
+    const bossSector = this.state.sector === 25;
+    const warningBottom =
+      this.viewport.x <= 600
+        ? bossSector
+          ? 240
+          : 210
+        : this.viewport.x <= 760 && this.viewport.y > 500
+          ? bossSector
+            ? 250
+            : 220
+          : this.viewport.y <= 500
+            ? 156
+            : 180;
+    const minBottom = warningBottom + labelHeight + 8;
+    const maxBottom = Math.max(minBottom, this.viewport.y * 0.68);
     this.state.radar = threats
-      .sort((a, b) => a.x - b.x)
-      .slice(0, narrow ? 2 : 3)
+      .sort((a, b) => a.priority - b.priority || Math.abs(a.x - p.x) - Math.abs(b.x - p.x))
+      .slice(0, compactRadar ? 2 : 3)
       .map((t) => {
         const point = new T.Vector3(t.x, t.y, 0).project(this.camera);
+        const projectedX = clamp(
+          ((point.x + 1) / 2) * this.viewport.x,
+          labelWidth / 2 + 8,
+          this.viewport.x - labelWidth / 2 - 8,
+        );
+        const projectedY = clamp(((1 - point.y) / 2) * this.viewport.y, minBottom, maxBottom);
+        let position: { x: number; y: number } | undefined;
+        // Keep the world cue near its target while respecting measured instrument bounds.
+        for (const offset of [0, -labelWidth - 8, labelWidth + 8]) {
+          const x = clamp(
+            projectedX + offset,
+            labelWidth / 2 + 8,
+            this.viewport.x - labelWidth / 2 - 8,
+          );
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const y = clamp(
+              projectedY + (attempt % 2 ? 1 : -1) * Math.ceil(attempt / 2) * (labelHeight + 8),
+              minBottom,
+              maxBottom,
+            );
+            if (
+              placed.every(
+                (p) => Math.abs(p.x - x) >= labelWidth + 8 || Math.abs(p.y - y) >= labelHeight + 8,
+              ) &&
+              this.radarObstacles.every(
+                (box) =>
+                  x + labelWidth / 2 <= box.left ||
+                  x - labelWidth / 2 >= box.right ||
+                  y <= box.top ||
+                  y - labelHeight >= box.bottom,
+              )
+            ) {
+              position = { x, y };
+              break;
+            }
+          }
+          if (position) break;
+        }
+        // On a crowded small screen, omit a lower-priority tag instead of covering a control.
+        if (!position) return null;
+        const { x, y } = position;
+        placed.push(position);
         return {
           id: t.id,
-          x: clamp((point.x + 1) * 50, narrow ? 20 : 12, narrow ? 76 : 88),
-          y: clamp((1 - point.y) * 50, narrow ? 34 : 24, 68),
+          x: (x / this.viewport.x) * 100,
+          y: (y / this.viewport.y) * 100,
           label: t.label,
           distance: Math.max(0, Math.round(t.x - p.x)),
           urgent: t.urgent,
           offscreen: Math.abs(point.x) > 0.85,
         };
-      });
-    this.backdrop.group.position.x = p.x * 0.98;
+      })
+      .filter((marker) => marker !== null);
+    updateParallax(this.backdrop, p.x);
     this.light.position.x = p.x - 25;
     this.light.target.position.x = p.x + 10;
     (this.scene.background as T.Color).lerp(
@@ -1362,13 +1853,17 @@ export class Game {
     if (particleCount > 0) this.particleMesh.instanceMatrix.needsUpdate = true;
   }
   private clearEntities() {
-    for (const e of this.enemies) disposeGroup(e.group);
+    if (this.bombTargets) {
+      this.bombTargets.count = 0;
+      this.bombTargets.visible = false;
+    }
+    for (const e of this.enemies) this.enemyModels.release(e.group);
     this.enemies = [];
     for (const s of this.shots) {
       s.active = false;
       s.mesh.visible = false;
     }
-    for (const s of this.strikes) disposeGroup(s.mesh);
+    for (const s of this.strikes) s.mesh.removeFromParent();
     this.strikes = [];
     for (const p of this.particles) p.life = 0;
   }
@@ -1380,19 +1875,24 @@ export class Game {
     window.removeEventListener('keyup', this.keyUp);
     window.removeEventListener('blur', this.blur);
     document.removeEventListener('visibilitychange', this.visibility);
+    if (this.initializing || this.released) return;
+    this.released = true;
     this.audio.dispose();
-    if (this.ready) {
-      this.clearEntities();
-      this.hazards.dispose();
-      this.terrain.dispose();
-      this.world.free();
-      this.graphics.dispose();
-      this.lighting.dispose();
-      this.light.dispose();
-      disposeGroup(this.scene);
-      this.compute.dispose();
-      this.renderer.dispose();
-      this.renderer.domElement.remove();
-    }
+    this.clearEntities();
+    this.enemyModels.dispose();
+    this.hazards?.dispose();
+    this.terrain?.dispose();
+    this.world?.free();
+    this.graphics?.dispose();
+    this.lighting?.dispose();
+    this.light.dispose();
+    this.strikeGeometry.dispose();
+    this.strikeMaterial.dispose();
+    disposeGroup(this.rover.group);
+    this.backdrop?.mountainMaterial.dispose();
+    disposeGroup(this.scene);
+    this.compute.dispose();
+    this.renderer?.dispose();
+    this.renderer?.domElement.remove();
   }
 }

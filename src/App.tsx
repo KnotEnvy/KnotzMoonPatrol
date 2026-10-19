@@ -1,18 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useIsPresent } from 'framer-motion';
 import {
   ArrowRight,
-  ArrowUpRight,
   AudioLines,
   ChevronRight,
-  CircleHelp,
   Crosshair,
   Expand,
-  Gauge,
   Orbit,
   Pause,
   Play,
-  Radio,
   RotateCcw,
   Shield,
   SlidersHorizontal,
@@ -21,7 +17,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { Game, type Loadout } from './game/engine';
+import type { Game, Loadout } from './game/engine';
 import { BIOMES, initialTelemetry, SECTOR_LENGTH, type Weapon, type SkyWeapon } from './game/rules';
 import { GRAPHICS_PRESETS, type GraphicsQuality } from './game/quality';
 const groundWeapons = [
@@ -32,7 +28,7 @@ const groundWeapons = [
 const skyWeapons = [
   { id: 'flak', name: 'Flak Cannon', detail: 'Airburst shells · swarm control' },
   { id: 'rail', name: 'Tachyon Railgun', detail: 'Hold to charge · release to pierce' },
-  { id: 'seeker', name: 'Seeker Missiles', detail: 'Four guided rockets · target tracking' },
+  { id: 'seeker', name: 'Seeker Missiles', detail: 'Twin guided rockets · target tracking' },
 ] as const;
 const controls = [
   ['A / ←', 'Brake to 40% cruise'],
@@ -55,6 +51,7 @@ const time = (n: number) =>
     .toString()
     .padStart(2, '0');
 export default function App() {
+  const menuRef = useRef<HTMLElement>(null);
   const host = useRef<HTMLDivElement>(null),
     game = useRef<Game | null>(null);
   const [s, setState] = useState(initialTelemetry()),
@@ -70,19 +67,36 @@ export default function App() {
     biome = BIOMES[s.biome],
     playing = s.phase === 'playing';
   useEffect(() => {
-    const engine = new Game(
-      host.current!,
-      (state) => {
-        setState(state);
-        setMuted(!engine.audio.enabled);
-      },
-      setError,
-    );
-    game.current = engine;
-    if (import.meta.env.DEV) (window as unknown as { __voidRunner: Game }).__voidRunner = engine;
-    void engine.init();
+    let active = true;
+    let engine: Game | undefined;
+    // Show the title/loading controls before downloading and parsing the authored
+    // model library and renderer. Cancellation also handles React's dev remount.
+    void import('./game/engine')
+      .then(({ Game }) => {
+        if (!active || !host.current) return;
+        engine = new Game(
+          host.current,
+          (state) => {
+            if (!active) return;
+            setState(state);
+            setMuted(!engine!.audio.enabled);
+          },
+          (message) => {
+            if (active) setError(message);
+          },
+        );
+        game.current = engine;
+        if (import.meta.env.DEV || import.meta.env.MODE === 'benchmark')
+          (window as unknown as { __voidRunner: Game }).__voidRunner = engine;
+        return engine.init();
+      })
+      .catch((reason: unknown) => {
+        if (active)
+          setError(reason instanceof Error ? reason.message : 'Unable to load game assets.');
+      });
     return () => {
-      engine.dispose();
+      active = false;
+      engine?.dispose();
       game.current = null;
     };
   }, []);
@@ -100,7 +114,7 @@ export default function App() {
   }, [help, hangar, graphics]);
   useEffect(() => {
     if (game.current) game.current.overlayOpen = help || hangar || graphics;
-  }, [help, hangar, graphics]);
+  }, [help, hangar, graphics, ready]);
   const start = () => {
     game.current?.start({ ground, sky } as Loadout);
     (document.activeElement as HTMLElement)?.blur();
@@ -121,6 +135,78 @@ export default function App() {
     setHangar(false);
     setGraphics(true);
   };
+  useEffect(() => {
+    if (!menu || help || hangar || graphics) return;
+    const navigate = (event: KeyboardEvent) => {
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.code)) {
+        const buttons = Array.from(menuRef.current?.querySelectorAll('button') ?? []).filter(
+          (button) => !button.disabled,
+        );
+        if (!buttons.length) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        const next =
+          event.code === 'Home'
+            ? 0
+            : event.code === 'End'
+              ? buttons.length - 1
+              : event.code === 'ArrowUp'
+                ? current <= 0
+                  ? buttons.length - 1
+                  : current - 1
+                : (current + 1) % buttons.length;
+        buttons[next].focus();
+      } else if (
+        event.code === 'Enter' &&
+        ready &&
+        !(event.target as HTMLElement).closest('button')
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        game.current?.start({ ground, sky } as Loadout);
+      }
+    };
+    window.addEventListener('keydown', navigate, true);
+    return () => window.removeEventListener('keydown', navigate, true);
+  }, [menu, help, hangar, graphics, ground, sky, ready]);
+  useEffect(() => {
+    const engine = game.current;
+    const surface = host.current?.parentElement;
+    if (!engine || !surface) return;
+    if (!playing) {
+      engine.radarObstacles = [];
+      return;
+    }
+    const instruments = Array.from(
+      surface.querySelectorAll<HTMLElement>(
+        '.telemetry, .weapon-status, .scoreboard, .route, .game-tools, .speed, .notice, .warning-banner, .boss-bar, .touch-controls',
+      ),
+    );
+    const measure = () => {
+      const origin = surface.getBoundingClientRect();
+      engine.radarObstacles = instruments
+        .filter((node) => node.isConnected && getComputedStyle(node).display !== 'none')
+        .map((node) => {
+          const box = node.getBoundingClientRect();
+          return {
+            left: box.left - origin.left - 8,
+            right: box.right - origin.left + 8,
+            top: box.top - origin.top - 8,
+            bottom: box.bottom - origin.top + 8,
+          };
+        });
+    };
+    const observer = new ResizeObserver(measure);
+    [surface, ...instruments].forEach((node) => observer.observe(node));
+    measure();
+    // Re-measure after banner entrance motion, without reading layout every game frame.
+    const settled = window.setTimeout(measure, 400);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(settled);
+    };
+  }, [playing, ground, sky, s.warning, s.notice, s.sector]);
   const cancelTouch = (key: string) => {
     if (key === 'KeyJ' && game.current?.touch.has(key)) game.current.cancelWeaponInput();
     game.current?.touch.delete(key);
@@ -141,57 +227,35 @@ export default function App() {
       <div className="scene" ref={host} />
       <div className="scene-shade" />
       <div className="grain" />
-      <header className="topbar">
-        <a
-          className="brand"
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            if (playing) game.current?.pause();
-          }}
-          aria-label="Void Runner"
-        >
-          <span className="brand-symbol">
-            <Orbit size={23} />
-          </span>
-          <span>
-            VOID<span className="brand-thin">RUNNER</span>
-            <small>MOON PATROL PROJECT</small>
-          </span>
-        </a>
-        <div className="header-center">
-          <span className="tiny-square" /> EXPEDITION PROGRAM <span className="divider">/</span>{' '}
-          <b>001</b>
-        </div>
-        <div className="header-actions">
-          <span className="engine-label">
-            <span className={'status-dot ' + (ready ? '' : 'loading')} />
-            {ready ? s.backend : 'BOOTING'}
-          </span>
-          <button
-            className="icon-button"
-            onClick={openGraphics}
-            aria-label="Graphics settings"
-            title="Graphics settings"
-            disabled={!ready}
-          >
-            <SlidersHorizontal size={17} />
-          </button>
+      {!help && !hangar && !graphics && (menu || playing) && (
+        <div className="game-tools" aria-label="Game controls">
+          {!menu && (
+            <button
+              className="icon-button pause-button"
+              onClick={() => game.current?.pause()}
+              aria-label="Pause game"
+              title="Pause (Esc)"
+            >
+              <Pause size={18} />
+            </button>
+          )}
+          {!menu && (
+            <button
+              className="icon-button"
+              onClick={openGraphics}
+              aria-label="Graphics settings"
+              title="Graphics settings"
+            >
+              <SlidersHorizontal size={18} />
+            </button>
+          )}
           <button
             className="icon-button"
             onClick={toggleAudio}
             title={muted ? 'Enable audio' : 'Mute audio'}
             aria-label={muted ? 'Enable audio' : 'Mute audio'}
           >
-            {muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
-          </button>
-          <button
-            className="icon-button"
-            onClick={openHelp}
-            aria-label="Flight manual"
-            title="Flight manual"
-          >
-            <CircleHelp size={17} />
+            {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
           <button
             className="icon-button"
@@ -199,167 +263,99 @@ export default function App() {
             aria-label="Toggle fullscreen"
             title="Fullscreen"
           >
-            <Expand size={16} />
+            <Expand size={17} />
           </button>
         </div>
-      </header>
-      <AnimatePresence mode="wait">
+      )}
+      <AnimatePresence initial={false}>
         {menu ? (
           <motion.section
             key="menu"
             className="mission-screen"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            exit={{ opacity: 0, transition: { duration: 0 } }}
             transition={{ duration: 0.35 }}
           >
-            <div className="hero-copy">
-              <div className="eyebrow">
-                <span className="orange-line" /> LUNAR EXPEDITION / A—Z
+            <div className="title-content">
+              <div className="title-kicker">
+                <Orbit size={18} /> MOON PATROL PROJECT
               </div>
-              <h1>
-                THE QUIET
-                <br />
-                WON’T LAST<span>.</span>
+              <h1 className="game-title" aria-label="Void Runner">
+                <span>VOID</span>
+                <span>RUNNER</span>
               </h1>
-              <p>
-                Six wheels. Two guns. One way forward.
-                <br />
-                Carve a path through the edge of the unknown.
-              </p>
-              <button className="launch-button" onClick={start} disabled={!ready}>
-                <span>{ready ? 'BEGIN EXPEDITION' : 'INITIALIZING SYSTEMS'}</span>
-                {ready ? <ArrowRight size={21} /> : <span className="spinner" />}
-              </button>
-              <div className="launch-note">
-                <span className="status-dot" />{' '}
-                {ready ? 'ROVER SYSTEMS NOMINAL' : 'CONNECTING ROVER SYSTEMS'}
-                <span>01 / 05 BIOMES</span>
-              </div>
-            </div>
-            <aside className="mission-card">
-              <div className="card-head">
-                <span>DEPLOYMENT ZONE</span>
-                <ArrowUpRight size={16} />
-              </div>
-              <div className="planet-mark">
-                <Orbit size={45} strokeWidth={0.7} />
-                <span>01</span>
-              </div>
-              <h2>
-                Mare
-                <br />
-                Tranquillitatis
-              </h2>
-              <p>THE SEA OF TRANQUILITY</p>
-              <div className="coordinates">00° 40′ 26.7″ N &nbsp; 23° 28′ 22.7″ E</div>
-              <div className="environment-row">
-                <span>SECTORS</span>
-                <b>A — E</b>
-              </div>
-              <div className="environment-row">
-                <span>GRAVITY</span>
-                <b>LOW</b>
-              </div>
-              <div className="environment-row">
-                <span>HOSTILITY</span>
-                <b className="amber">UNCONFIRMED</b>
-              </div>
-              <div className="transmission">
-                <Radio size={13} />
-                <span>Last transmission: 04:32 UTC</span>
-              </div>
-            </aside>
-            <div className="rover-label">
-              <span className="label-line" />
-              <div>
-                <b>RV–06 “NOMAD”</b>
-                <span>ALL-TERRAIN RECONNAISSANCE VEHICLE</span>
-              </div>
-            </div>
-            <div className="loadout-dock">
-              <div className="dock-caption">
-                <span className="eyebrow">PRE-FLIGHT CHECK</span>
-                <h3>
-                  Built for the
-                  <br />
-                  unforgiving.
-                </h3>
-                <button className="text-button" onClick={() => setHangar(true)}>
-                  CONFIGURE ROVER <ArrowUpRight size={14} />
+              <p className="title-tagline">SIX WHEELS. TWO GUNS. ONE WAY FORWARD.</p>
+              <nav className="title-menu" aria-label="Main menu" ref={menuRef}>
+                <button className="menu-primary" onClick={start} disabled={!ready}>
+                  <ChevronRight aria-hidden="true" size={22} />
+                  <span>{ready ? 'BEGIN EXPEDITION' : 'INITIALIZING SYSTEMS'}</span>
+                  {!ready && <i className="spinner" />}
                 </button>
-              </div>
-              <button className="weapon-card" onClick={() => setHangar(true)}>
-                <span className="weapon-icon">
-                  <Crosshair size={29} strokeWidth={1} />
-                </span>
-                <span>
-                  <small>01 / FORWARD BATTERY</small>
-                  <b>{groundWeapons.find((w) => w.id === ground)!.name}</b>
-                  <em>{groundWeapons.find((w) => w.id === ground)!.detail}</em>
-                </span>
-                <ChevronRight size={16} />
-              </button>
-              <button className="weapon-card" onClick={() => setHangar(true)}>
-                <span className="weapon-icon">
-                  <ArrowUpRight size={32} strokeWidth={1} />
-                </span>
-                <span>
-                  <small>02 / ANTI-AIR TURRET</small>
-                  <b>{skyWeapons.find((w) => w.id === sky)!.name}</b>
-                  <em>{skyWeapons.find((w) => w.id === sky)!.detail}</em>
-                </span>
-                <ChevronRight size={16} />
-              </button>
-              <div className="record">
-                <small>PERSONAL BEST</small>
-                <b>{fmt(s.best).padStart(6, '0')}</b>
-                <span>MAKE YOUR MARK</span>
+                <button onClick={() => setHangar(true)}>
+                  <ChevronRight aria-hidden="true" size={22} />
+                  <span>CONFIGURE ROVER</span>
+                </button>
+                <button onClick={openGraphics} aria-label="Graphics settings" disabled={!ready}>
+                  <ChevronRight aria-hidden="true" size={22} />
+                  <span>GRAPHICS</span>
+                </button>
+                <button onClick={openHelp} aria-label="Flight manual">
+                  <ChevronRight aria-hidden="true" size={22} />
+                  <span>FLIGHT MANUAL</span>
+                </button>
+              </nav>
+              <div className="menu-input-hint">
+                <kbd>↑</kbd>
+                <kbd>↓</kbd> SELECT <kbd>ENTER</kbd> CONFIRM
               </div>
             </div>
+            <div className="title-record">
+              <small>HIGH SCORE</small>
+              <b>{fmt(s.best).padStart(6, '0')}</b>
+            </div>
+            <div className="title-world">
+              <span className="status-dot" /> MARE TRANQUILLITATIS <span>SECTOR A / 26</span>
+            </div>
+            <button
+              className="loadout-dock"
+              onClick={() => setHangar(true)}
+              aria-label="Review equipped weapons"
+            >
+              <span className="loadout-heading">
+                RV–06 / NOMAD{' '}
+                <span>
+                  LOADOUT <ChevronRight size={12} />
+                </span>
+              </span>
+              <span>
+                <small>GROUND</small>
+                <b>{groundWeapons.find((w) => w.id === ground)!.name}</b>
+              </span>
+              <span>
+                <small>SKY</small>
+                <b>{skyWeapons.find((w) => w.id === sky)!.name}</b>
+              </span>
+            </button>
           </motion.section>
         ) : (
           <motion.section
             key="hud"
             className="hud"
-            initial={{ opacity: 0 }}
+            initial={false}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
             <div className="telemetry">
-              <div className="speed">
-                <small>
-                  <Gauge size={13} /> GROUND SPEED
-                </small>
-                <div>
-                  {Math.round(s.speed * 3.6)
-                    .toString()
-                    .padStart(3, '0')}
-                  <span>KM/H</span>
-                </div>
-                <b>
-                  {s.lowGravity
-                    ? 'LOW GRAVITY'
-                    : s.speed > 26
-                      ? 'OVERDRIVE'
-                      : s.speed < 12
-                        ? 'BRAKING'
-                        : 'CRUISE'}
-                </b>
-              </div>
               <div className="gauges">
                 <Meter
-                  label="OVERDRIVE CAPACITOR"
+                  label="ENERGY"
                   value={s.capacitor}
                   icon={<Zap size={12} />}
                   color="var(--accent)"
                 />
                 <Meter
-                  label={
-                    s.lockout > 0
-                      ? 'CORE LOCKOUT ' + s.lockout.toFixed(1) + 's'
-                      : 'AUXILIARY CORE HEAT'
-                  }
+                  label={s.lockout > 0 ? 'LOCK ' + s.lockout.toFixed(1) + 's' : 'HEAT'}
                   value={s.heat}
                   icon={<AudioLines size={12} />}
                   color={s.heat > 75 ? '#ff6562' : '#eaa267'}
@@ -379,6 +375,23 @@ export default function App() {
                   ))}
                 </div>
               </div>
+            </div>
+            <div className="speed" aria-label="Ground speed">
+              <div>
+                {Math.round(s.speed * 3.6)
+                  .toString()
+                  .padStart(3, '0')}
+                <span>KM/H</span>
+              </div>
+              <b>
+                {s.lowGravity
+                  ? 'LOW GRAVITY'
+                  : s.speed > 26
+                    ? 'OVERDRIVE'
+                    : s.speed < 12
+                      ? 'BRAKING'
+                      : 'CRUISE'}
+              </b>
             </div>
             {(ground === 'beam' || sky === 'rail') && (
               <div className="weapon-status" aria-label="Weapon status">
@@ -416,7 +429,9 @@ export default function App() {
                     className={'threat-marker ' + (t.urgent ? 'urgent' : '')}
                     style={{ left: t.x + '%', top: t.y + '%' }}
                   >
-                    <span className="threat-glyph">{t.offscreen ? '›' : '⌖'}</span>
+                    <span className="threat-glyph">
+                      {t.offscreen ? <ChevronRight size={18} /> : <Crosshair size={18} />}
+                    </span>
                     <span>
                       <b>{t.label}</b>
                       <small>
@@ -428,18 +443,13 @@ export default function App() {
               </div>
             )}
             <div className="scoreboard">
-              <small>EXPEDITION SCORE</small>
+              <small>
+                SCORE <em>BEST {fmt(s.best).padStart(6, '0')}</em>
+              </small>
               <b>{fmt(s.score).padStart(6, '0')}</b>
               <span>
                 {time(s.time)} <i /> {fmt(s.distance)} M
               </span>
-              <button
-                className="pause-button"
-                onClick={() => game.current?.pause()}
-                aria-label="Pause game"
-              >
-                <Pause size={13} /> PAUSE <kbd>ESC</kbd>
-              </button>
             </div>
             <AnimatePresence>
               {s.warning && playing && (
@@ -463,7 +473,8 @@ export default function App() {
                   animate={{ y: 0, opacity: 1 }}
                   exit={{ opacity: 0 }}
                 >
-                  {s.notice}
+                  <span className="notice-full">{s.notice}</span>
+                  <span className="notice-compact">{s.notice.split(' · ')[0]}</span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -475,14 +486,14 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div className="sector-caption">
-              <small>SECTOR {String.fromCharCode(65 + s.sector)}</small>
-              <h3>{biome.name}</h3>
-              <span>{biome.sub}</span>
-            </div>
-            <div className="route">
+            <div className="route" aria-label="Expedition progress">
               <div className="route-label">
-                <span>EXPEDITION PROGRESS</span>
+                <div className="sector-caption">
+                  <small>
+                    SECTOR <b>{String.fromCharCode(65 + s.sector)}</b>
+                  </small>
+                  <h3>{biome.name}</h3>
+                </div>
                 <b>{((s.distance / (26 * SECTOR_LENGTH)) * 100).toFixed(1)}%</b>
               </div>
               <div className="route-stations">
@@ -500,40 +511,10 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              <div className="route-biomes">
-                {BIOMES.map((b, i) => (
-                  <span key={b.name} className={s.biome === i ? 'active' : ''}>
-                    {b.name}
-                  </span>
-                ))}
-              </div>
             </div>
           </motion.section>
         )}
       </AnimatePresence>
-      <footer className="bottom-bar">
-        <div className="keyboard-hints">
-          <span>
-            <kbd>←</kbd>
-            <kbd>→</kbd> SPEED
-          </span>
-          <span>
-            <kbd>SPACE</kbd> JUMP / HOVER
-          </span>
-          <span>
-            <kbd>J</kbd> DUAL FIRE
-          </span>
-          <span>
-            <kbd>K</kbd> VENT
-          </span>
-        </div>
-        <button onClick={openHelp} className="text-button">
-          FLIGHT MANUAL <ArrowUpRight size={12} />
-        </button>
-        <span className="build-label">
-          {s.fps > 0 ? s.fps + ' FPS' : '— FPS'} <i /> BUILD 0.1 / EXPLORER
-        </span>
-      </footer>
       {playing && (
         <div className="touch-controls">
           {[
@@ -561,21 +542,24 @@ export default function App() {
       {s.hull < 30 && playing && <div className="damage-vignette" />}
       <AnimatePresence>
         {s.phase === 'paused' && !help && !graphics && (
-          <Modal title="A moment of silence." eyebrow="EXPEDITION PAUSED" key="paused">
-            <p className="modal-intro">Your rover is holding position. The void can wait.</p>
+          <Modal title="Paused" eyebrow="EXPEDITION PAUSED" key="paused">
+            <p className="modal-intro">PAUSED · Your rover is holding position.</p>
             <button className="launch-button" onClick={() => game.current?.pause()}>
               <span>RESUME EXPEDITION</span>
               <Play size={18} />
             </button>
             <div className="modal-links">
-              <button onClick={openHelp}>FLIGHT MANUAL</button>
+              <button onClick={openHelp} aria-label="Flight manual">
+                FLIGHT MANUAL
+              </button>
+              <button onClick={openGraphics}>GRAPHICS</button>
               <button onClick={() => game.current?.menu()}>RETURN TO BASE</button>
             </div>
           </Modal>
         )}
         {s.phase === 'report' && !help && !graphics && (
           <Modal
-            title="Checkpoint secured."
+            title="Checkpoint secured"
             eyebrow={'SECTOR ' + String.fromCharCode(64 + s.sector) + ' / EXPEDITION REPORT'}
             key="report"
           >
@@ -597,11 +581,14 @@ export default function App() {
               <span>CONTINUE EXPEDITION</span>
               <ArrowRight size={18} />
             </button>
+            <button className="return-button" onClick={openGraphics} aria-label="Graphics settings">
+              GRAPHICS
+            </button>
           </Modal>
         )}
         {(s.phase === 'dead' || s.phase === 'complete') && !help && !graphics && (
           <Modal
-            title={s.phase === 'dead' ? 'Signal lost.' : 'Beyond the void.'}
+            title={s.phase === 'dead' ? 'Rover destroyed' : 'Expedition complete'}
             eyebrow={s.phase === 'dead' ? 'ROVER TELEMETRY OFFLINE' : 'EXPEDITION COMPLETE / A—Z'}
             key="end"
           >
@@ -620,18 +607,36 @@ export default function App() {
               <Stat label="TARGETS DESTROYED" value={String(s.kills)} />
               <Stat label="PERSONAL BEST" value={fmt(s.best)} />
             </div>
-            <button className="launch-button" onClick={start}>
+            {s.phase === 'dead' && s.checkpoint > 0 && (
+              <>
+                <button className="launch-button" onClick={() => game.current?.retryCheckpoint()}>
+                  <span>RECOVER AT CHECKPOINT {String.fromCharCode(64 + s.checkpoint)}</span>
+                  <RotateCcw size={18} />
+                </button>
+                <p className="service-note">
+                  RESTART THIS LEG WITH FULL HULL AND ENERGY. SCORE AND PROGRESS RETURN TO YOUR
+                  CHECKPOINT.
+                </p>
+              </>
+            )}
+            <button
+              className={s.phase === 'dead' && s.checkpoint > 0 ? 'return-button' : 'launch-button'}
+              onClick={start}
+            >
               <span>RUN IT AGAIN</span>
               <RotateCcw size={18} />
             </button>
             <button className="return-button" onClick={() => game.current?.menu()}>
               RETURN TO BASE
             </button>
+            <button className="return-button" onClick={openGraphics} aria-label="Graphics settings">
+              GRAPHICS
+            </button>
           </Modal>
         )}
         {graphics && (
           <Modal
-            title="Find your balance."
+            title="Graphics"
             eyebrow="DISPLAY / GRAPHICS"
             close={() => setGraphics(false)}
             key="graphics"
@@ -663,8 +668,15 @@ export default function App() {
             <p className="service-note">
               {s.backend === 'WEBGL 2'
                 ? 'Dynamic shadows and cinematic glow require WebGPU. Surface detail and headlights remain available.'
-                : 'Cinematic adds bloom and a subtle lens effect during boosts and impacts.'}
+                : 'Cinematic adds bloom and a subtle lens effect during impacts.'}
             </p>
+            <div className="renderer-info">
+              <span className="engine-label">{s.backend}</span>
+              <span>
+                {s.fps > 0 ? s.fps + ' FPS' : 'WARMING UP'} ·{' '}
+                {GRAPHICS_PRESETS[s.quality].label.toUpperCase()}
+              </span>
+            </div>
             <button className="launch-button" onClick={() => setGraphics(false)}>
               <span>DONE</span>
               <ArrowRight size={18} />
@@ -673,7 +685,7 @@ export default function App() {
         )}
         {help && (
           <Modal
-            title="Know your rover."
+            title="Flight manual"
             eyebrow="RV–06 / FLIGHT MANUAL"
             close={() => setHelp(false)}
             key="help"
@@ -705,6 +717,14 @@ export default function App() {
               RESONANCE: HOLD FIRE TO MELT ROCKS. TACHYON: HOLD FIRE TO CHARGE, RELEASE TO SHOOT.
               BUILD AT LEAST A QUARTER CHARGE. VENTING OR PAUSING CANCELS THE CHARGE.
             </p>
+            <p className="service-note">
+              PATROL CLEARANCE: JUMP ROCKS +100 · MINES +150 · SKIMMERS +200 · CHASMS +50. LAND
+              WITHOUT DAMAGE TO BANK YOUR BONUS. CLEAN LANDINGS ADD +250.
+            </p>
+            <p className="service-note">
+              BOMB RUNS: ORANGE RINGS MARK THE LANDING ZONE. SHOOT BOMBS FOR +50, CHANGE SPEED TO
+              EVADE, OR JUMP THE CRATER. FLIGHT FRAMING STAYS STEADY AT EVERY SPEED.
+            </p>
             <button className="launch-button" onClick={() => setHelp(false)}>
               <span>UNDERSTOOD</span>
               <ArrowRight size={18} />
@@ -713,7 +733,7 @@ export default function App() {
         )}
         {hangar && (
           <Modal
-            title="Make it yours."
+            title="Rover loadout"
             eyebrow="RV–06 / WEAPON LOADOUT"
             close={() => setHangar(false)}
             key="hangar"
@@ -727,6 +747,7 @@ export default function App() {
                 <button
                   key={w.id}
                   className={ground === w.id ? 'selected' : ''}
+                  aria-pressed={ground === w.id}
                   onClick={() => setGround(w.id)}
                 >
                   <span>
@@ -741,6 +762,7 @@ export default function App() {
                 <button
                   key={w.id}
                   className={sky === w.id ? 'selected' : ''}
+                  aria-pressed={sky === w.id}
                   onClick={() => setSky(w.id)}
                 >
                   <span>
@@ -798,7 +820,14 @@ function Meter({
           <em>%</em>
         </span>
       </div>
-      <div className="meter-track">
+      <div
+        className="meter-track"
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(value)}
+      >
         <motion.i
           animate={{ scaleX: value / 100 }}
           transition={{ duration: 0.1 }}
@@ -827,15 +856,30 @@ function Modal({
   eyebrow: string;
   close?: () => void;
 }) {
+  const present = useIsPresent();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    ref.current?.focus();
-    return () => prev?.focus();
+    const dialog = ref.current;
+    dialog?.focus();
+    return () => {
+      // An exiting panel must not steal focus from a replacement command panel.
+      const replacement = Array.from(document.querySelectorAll('[role="dialog"]')).some(
+        (node) => node !== dialog,
+      );
+      if (replacement || document.querySelector('.phase-playing')) return;
+      if (
+        prev?.isConnected &&
+        (dialog?.contains(document.activeElement) || document.activeElement === document.body)
+      )
+        prev.focus();
+    };
   }, []);
   return (
     <motion.div
       className="modal-backdrop"
+      aria-hidden={!present}
+      style={{ pointerEvents: present ? 'auto' : 'none' }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}

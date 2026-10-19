@@ -1,10 +1,12 @@
 import * as T from 'three/webgpu';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { baseHeight, BIOMES, biomeIndex, randomAt } from './rules';
+import { baseHeight, BIOMES, biomeIndex, randomAt, FINISH } from './rules';
 import { mat, box, disposeGroup, disposeMaterial } from './models';
 import { biomeSurface } from './surfaces';
 import { TerrainCompute } from './terrain-compute';
+import { terrainCollider } from './terrain-collider';
 import { batchStaticMeshes } from './render-batches';
+import { addEnvironment } from './environment';
 interface Chunk {
   id: number;
   group: T.Group;
@@ -14,10 +16,15 @@ interface Chunk {
   indices: Uint32Array;
   version: number;
 }
+type PreparedChunk = Omit<Chunk, 'collider'> & { original: Float32Array };
 export class Terrain {
   private materials = new Map<number, T.MeshStandardMaterial>();
   private retainedMaterials = new Set<T.Material>();
   private chunks = new Map<number, Chunk>();
+  private prepared = new Map<number, PreparedChunk>();
+  private sceneryMaterials = new Map<string, T.MeshStandardMaterial>();
+  private dirty = new Set<number>();
+  private generation = 0;
   private disposed = false;
   private queue = Promise.resolve();
   constructor(
@@ -25,6 +32,37 @@ export class Terrain {
     private world: RAPIER.World,
     private compute: TerrainCompute,
   ) {}
+  /** The route is finite. Build its CPU geometry during loading, never on a driving frame. */
+  async prepare() {
+    for (let id = -2; id <= Math.floor((FINISH + 200) / 64); id++) {
+      if (this.disposed) return;
+      if (!this.prepared.has(id)) this.prepared.set(id, this.build(id));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  }
+  warmupGroups() {
+    return [...this.prepared.values()].map((c) => c.group);
+  }
+  warmupViews() {
+    const seen = new Set<number>();
+    return [...this.prepared.values()]
+      .filter((chunk) => {
+        const biome = biomeIndex(chunk.id * 64);
+        if (seen.has(biome)) return false;
+        seen.add(biome);
+        return true;
+      })
+      .map((chunk) => ({ group: chunk.group, origin: chunk.id * 64 }));
+  }
+  private scenery(key: string, color: string, metalness = 0.15, roughness = 0.7, glow?: string) {
+    let material = this.sceneryMaterials.get(key);
+    if (!material) {
+      material = mat(color, metalness, roughness, glow);
+      this.sceneryMaterials.set(key, material);
+      this.retainedMaterials.add(material);
+    }
+    return material;
+  }
   update(x: number) {
     const min = Math.floor((x - 90) / 64),
       max = Math.floor((x + 200) / 64);
@@ -32,11 +70,21 @@ export class Terrain {
     for (const [id, c] of this.chunks)
       if (id < min || id > max) {
         this.world.removeCollider(c.collider, true);
-        disposeGroup(c.group, this.retainedMaterials);
+        c.group.removeFromParent();
         this.chunks.delete(id);
       }
   }
   private add(id: number) {
+    let prepared = this.prepared.get(id);
+    if (!prepared) {
+      prepared = this.build(id);
+      this.prepared.set(id, prepared);
+    }
+    const collider = this.world.createCollider(terrainCollider(prepared.vertices));
+    this.scene.add(prepared.group);
+    this.chunks.set(id, { ...prepared, collider });
+  }
+  private build(id: number): PreparedChunk {
     const group = new T.Group(),
       vertices: number[] = [],
       indices: number[] = [];
@@ -72,25 +120,45 @@ export class Terrain {
     const mesh = new T.Mesh(geo, material);
     mesh.receiveShadow = true;
     group.add(mesh);
-    // A dark cut edge gives the continuous terrain depth in the side-on view.
+    // An outward-facing stratified cut shows the terrain's physical depth. The old
+    // reversed winding exposed the void/lava beneath the front edge of the route.
     const edgeVertices: number[] = [],
-      edgeIndices: number[] = [];
+      edgeIndices: number[] = [],
+      edgeColors: number[] = [];
+    const courses = 5;
     for (let i = 0; i <= 64; i++) {
       const x = id * 64 + i;
-      edgeVertices.push(x, baseHeight(x, 12), 12, x, -13, 12);
+      const top = baseHeight(x, 12);
+      for (let row = 0; row < courses; row++) {
+        const depth = row / (courses - 1);
+        edgeVertices.push(x, top * (1 - depth) - 13 * depth, 12);
+        const shade = (0.73 - depth * 0.43) * (1 + Math.sin(x * 0.17 + row * 2.4) * 0.075);
+        edgeColors.push(shade, shade * 0.96, shade * 0.9);
+      }
     }
-    for (let i = 0; i < 64; i++) {
-      const a = i * 2;
-      edgeIndices.push(a, a + 2, a + 1, a + 2, a + 3, a + 1);
-    }
+    for (let i = 0; i < 64; i++)
+      for (let row = 0; row < courses - 1; row++) {
+        const a = i * courses + row;
+        edgeIndices.push(a, a + 1, a + courses, a + courses, a + 1, a + courses + 1);
+      }
     const skirt = new T.BufferGeometry();
     skirt.setAttribute('position', new T.Float32BufferAttribute(edgeVertices, 3));
+    skirt.setAttribute('color', new T.Float32BufferAttribute(edgeColors, 3));
     skirt.setIndex(edgeIndices);
     skirt.computeVertexNormals();
-    group.add(new T.Mesh(skirt, mat('#26333e', 0.1, 1)));
+    const skirtMaterial = this.scenery(
+      'skirt-' + surfaceBiome,
+      BIOMES[surfaceBiome].ground,
+      0.1,
+      1,
+    );
+    skirtMaterial.vertexColors = true;
+    const cutEdge = new T.Mesh(skirt, skirtMaterial);
+    cutEdge.name = 'terrain-cut-edge';
+    group.add(cutEdge);
     const biome = biomeIndex(id * 64),
-      accent = mat(BIOMES[biome].color, 0.2, 0.3, BIOMES[biome].color),
-      markerMaterial = mat('#485d67');
+      accent = this.scenery('accent-' + biome, BIOMES[biome].color, 0.2, 0.3, BIOMES[biome].color),
+      markerMaterial = this.scenery('marker', '#485d67');
     for (let i = 0; i < 3; i++) {
       const x = id * 64 + 8 + i * 23,
         z = -5.5;
@@ -99,60 +167,25 @@ export class Terrain {
         box(group, [0.16, 0.28, 0.2], [x, baseHeight(x) + 1.8, z], accent);
       }
     }
-    for (let i = 0; i < 14; i++) {
-      const x = id * 64 + randomAt(id * 29 + i) * 64,
-        z = (randomAt(id * 47 + i) > 0.5 ? 1 : -1) * (3 + randomAt(id * 67 + i) * 7);
-      const h = baseHeight(x, z),
-        size = 0.15 + randomAt(id * 17 + i) * 0.65;
-      const rock = new T.Mesh(new T.DodecahedronGeometry(size, 0), material);
-      rock.position.set(x, h + size * 0.3, z);
-      rock.scale.set(1.5, 0.7, 1);
-      rock.rotation.y = i;
-      rock.castShadow = false;
-      group.add(rock);
-    }
-    if (biome === 1 || biome === 3) {
-      const crystalMaterial = mat(
-        BIOMES[biome].color,
-        0.55,
-        0.25,
-        biome === 3 ? '#174d35' : undefined,
-      );
-      for (let i = 0; i < 6; i++) {
-        const x = id * 64 + i * 11,
-          z = -7 - randomAt(id + i) * 4,
-          h = 2 + randomAt(id * 4 + i) * 7;
-        const crystal = new T.Mesh(
-          new T.ConeGeometry(biome === 1 ? 1.1 : 0.6, h, biome === 1 ? 5 : 7),
-          crystalMaterial,
-        );
-        crystal.position.set(x, baseHeight(x) + h / 2, z);
-        crystal.rotation.z = 0.15;
-        group.add(crystal);
-      }
-    }
+    addEnvironment(group, id, biome, this.scenery.bind(this));
     if (biome === 2) {
       const lava = box(
         group,
-        [64, 0.1, 24],
+        [64, 0.1, 12],
         [id * 64 + 32, -6, 0],
-        mat('#ff5825', 0.1, 0.4, '#e84008'),
+        this.scenery('lava', '#ff5825', 0.1, 0.4, '#e84008'),
       );
       lava.receiveShadow = false;
     }
-    if (biome === 4) {
-      const towerMaterial = mat('#28303d', 0.7, 0.4);
-      for (let i = 0; i < 4; i++) box(group, [2, 12, 2], [id * 64 + i * 18, 3, -10], towerMaterial);
-    }
     // The deformable surface remains independent from decorative batches.
     batchStaticMeshes(group, new Set([mesh]));
-    this.scene.add(group);
-    const collider = this.world.createCollider(RAPIER.ColliderDesc.trimesh(v, ix).setFriction(0.8));
-    this.chunks.set(id, { id, group, mesh, collider, vertices: v, indices: ix, version: 0 });
+    return { id, group, mesh, vertices: v, original: v.slice(), indices: ix, version: 0 };
   }
   carve(x: number, y: number, radius = 5, depth = 5) {
+    const generation = this.generation;
     this.queue = this.queue
       .then(async () => {
+        if (this.disposed || generation !== this.generation) return;
         const chunks = [...this.chunks.values()].filter(
           (chunk) => chunk.id * 64 <= x + radius && (chunk.id + 1) * 64 >= x - radius,
         );
@@ -162,7 +195,7 @@ export class Terrain {
             vertices: await this.compute.carve(chunk.vertices, x, y, radius, depth),
           })),
         );
-        if (this.disposed) return;
+        if (this.disposed || generation !== this.generation) return;
         const live = edits.filter(
           ({ chunk, vertices }) =>
             this.chunks.get(chunk.id) === chunk &&
@@ -176,9 +209,7 @@ export class Terrain {
             replacements.push({
               chunk,
               vertices,
-              collider: this.world.createCollider(
-                RAPIER.ColliderDesc.trimesh(vertices, chunk.indices).setFriction(0.8),
-              ),
+              collider: this.world.createCollider(terrainCollider(vertices)),
             });
         } catch (error) {
           for (const replacement of replacements)
@@ -195,6 +226,7 @@ export class Terrain {
           chunk.mesh.geometry.computeVertexNormals();
           chunk.mesh.geometry.computeBoundingSphere();
           chunk.version++;
+          this.dirty.add(chunk.id);
         }
       })
       .catch((error) => console.warn('Terrain brush failed', error));
@@ -210,17 +242,36 @@ export class Terrain {
       chunk.vertices[(i * 9 + 4) * 3 + 1] * (1 - t) + chunk.vertices[((i + 1) * 9 + 4) * 3 + 1] * t
     );
   }
-  dispose() {
-    this.disposed = true;
+  reset() {
+    this.generation++;
     for (const c of this.chunks.values()) {
       this.world.removeCollider(c.collider, true);
-      disposeGroup(c.group, this.retainedMaterials);
+      c.group.removeFromParent();
     }
     this.chunks.clear();
-    for (const material of this.materials.values()) {
-      disposeMaterial(material);
+    for (const id of this.dirty) {
+      const chunk = this.prepared.get(id);
+      if (!chunk) continue;
+      chunk.vertices.set(chunk.original);
+      chunk.mesh.geometry.getAttribute('position').needsUpdate = true;
+      chunk.mesh.geometry.computeVertexNormals();
+      chunk.mesh.geometry.computeBoundingSphere();
     }
+    this.dirty.clear();
+    this.update(0);
+  }
+  dispose() {
+    this.disposed = true;
+    const groups = new Set(
+      [...this.prepared.values(), ...this.chunks.values()].map((c) => c.group),
+    );
+    for (const c of this.chunks.values()) this.world.removeCollider(c.collider, true);
+    groups.forEach((group) => disposeGroup(group, this.retainedMaterials));
+    this.chunks.clear();
+    this.prepared.clear();
+    this.retainedMaterials.forEach(disposeMaterial);
     this.materials.clear();
+    this.sceneryMaterials.clear();
     this.retainedMaterials.clear();
   }
 }

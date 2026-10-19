@@ -4,6 +4,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { initializePhysics } from '../src/game/physics';
 import { Terrain } from '../src/game/terrain';
 import { TerrainCompute } from '../src/game/terrain-compute';
+import { terrainCollider } from '../src/game/terrain-collider';
 
 async function fixture() {
   await initializePhysics();
@@ -24,9 +25,19 @@ async function fixture() {
     }
   >();
   for (let id = 0; id < 2; id++) {
-    const left = 62 + id * 2,
-      vertices = new Float32Array([left, 0, -1, left, 0, 1, left + 2, 0, -1, left + 2, 0, 1]),
-      indices = new Uint32Array([0, 1, 2, 1, 3, 2]);
+    const vertices = new Float32Array(65 * 9 * 3),
+      triangles: number[] = [];
+    for (let x = 0; x <= 64; x++)
+      for (let z = 0; z <= 8; z++) {
+        const index = (x * 9 + z) * 3;
+        vertices[index] = id * 64 + x;
+        vertices[index + 2] = z * 3 - 12;
+        if (x < 64 && z < 8) {
+          const a = index / 3;
+          triangles.push(a, a + 1, a + 9, a + 1, a + 10, a + 9);
+        }
+      }
+    const indices = new Uint32Array(triangles);
     const geometry = new T.BufferGeometry();
     geometry.setAttribute('position', new T.BufferAttribute(vertices, 3));
     geometry.setIndex(new T.BufferAttribute(indices, 1));
@@ -35,7 +46,7 @@ async function fixture() {
       group = new T.Group();
     group.add(mesh);
     scene.add(group);
-    const collider = world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices));
+    const collider = world.createCollider(terrainCollider(vertices));
     chunks.set(id, { id, group, mesh, collider, vertices, indices, version: 0 });
   }
   (terrain as unknown as { chunks: typeof chunks }).chunks = chunks;

@@ -29,9 +29,25 @@ function makeImages(biome: number): SurfaceImages {
   for (let i = 0; i < pixels.data.length; i += 4) {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     const grain = (seed >>> 24) / 255;
-    const shade = base + (grain - 0.5) * (biome === 1 ? 24 : 52);
+    // Periodic, medium-scale bedding remains coherent across the 18 m UV tile.
+    // Fine grain sits below those structures instead of defining the whole surface.
+    const x = (((i / 4) % SIZE) / SIZE) * Math.PI * 2,
+      y = (Math.floor(i / 4 / SIZE) / SIZE) * Math.PI * 2;
+    const bedding = Math.sin(y * 3 + Math.sin(x) * 0.7);
+    const erosion = Math.sin(x * 2 + Math.cos(y) * 1.6);
+    const structure =
+      biome === 0
+        ? bedding * 9 + erosion * 5
+        : biome === 1
+          ? Math.sin(x + y * 2) * 8 + erosion * 3
+          : biome === 2
+            ? bedding * 6 + erosion * 8
+            : biome === 3
+              ? Math.sin(x * 2 + Math.sin(y * 2)) * 9 + bedding * 4
+              : Math.sin(x * 4) * 2;
+    const shade = base + structure + (grain - 0.5) * (biome === 1 ? 14 : 30);
     pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = shade;
-    relief.data[i] = relief.data[i + 1] = relief.data[i + 2] = 100 + grain * 50;
+    relief.data[i] = relief.data[i + 1] = relief.data[i + 2] = 110 + structure * 1.4 + grain * 22;
     pixels.data[i + 3] = relief.data[i + 3] = 255;
   }
   c.putImageData(pixels, 0, 0);
@@ -43,10 +59,10 @@ function makeImages(biome: number): SurfaceImages {
 
   if (biome === 0) {
     // Repeat rim stamps across texture edges so the lunar pattern tiles cleanly.
-    for (let i = 0; i < 38; i++) {
+    for (let i = 0; i < 14; i++) {
       const x = randomAt(i + 90) * SIZE,
         y = randomAt(i + 290) * SIZE,
-        r = 5 + randomAt(i + 30) * 27;
+        r = 10 + randomAt(i + 30) * 29;
       for (const dx of [-SIZE, 0, SIZE])
         for (const dy of [-SIZE, 0, SIZE]) {
           const gradient = c.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, r);
@@ -63,42 +79,82 @@ function makeImages(biome: number): SurfaceImages {
         }
     }
   } else if (biome === 1 || biome === 2 || biome === 3) {
-    // Fractured ice, obsidian seams, and branching fungal veins share bounded line work.
-    for (let i = 0; i < 24; i++) {
-      const x = randomAt(i * 3 + biome) * SIZE,
-        y = randomAt(i * 7 + 52) * SIZE;
-      const points = [
-        [x, y],
-        [x + 13, y + 8],
-        [x + 20, y + 44],
-        [x + 46, y + 61],
-      ];
+    // Connected fracture networks: large roots split into tapered short forks.
+    // Stamp wrapped copies so branches crossing a tile edge remain connected.
+    const branch = (
+      x: number,
+      y: number,
+      angle: number,
+      reach: number,
+      depth: number,
+      seed: number,
+    ) => {
+      const points: [number, number][] = [[x, y]];
+      for (let step = 0; step < 5; step++) {
+        angle += (randomAt(seed + step * 7) - 0.5) * (biome === 3 ? 0.45 : 0.8);
+        x += (Math.cos(angle) * reach) / 5;
+        y += (Math.sin(angle) * reach) / 5;
+        points.push([x, y]);
+      }
       for (const context of [c, h, e]) {
         if (!context) continue;
         context.strokeStyle =
           context === e
             ? biome === 2
-              ? '#ff762b'
-              : '#64a376'
+              ? '#c96935'
+              : '#4b785b'
             : context === h
-              ? '#444'
+              ? '#525252'
               : biome === 1
-                ? '#758398'
-                : '#292e32';
-        context.lineWidth = context === e ? 1.4 : 3;
-        context.beginPath();
-        points.forEach(([px, py], n) => (n ? context.lineTo(px, py) : context.moveTo(px, py)));
-        context.stroke();
+                ? '#a6bbd0'
+                : biome === 3
+                  ? '#455c4a'
+                  : '#3d3530';
+        context.lineWidth = (context === e ? 0.8 : context === h ? 1.8 : 1.2) * (0.5 + depth * 0.3);
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        for (const ox of [-SIZE, 0, SIZE])
+          for (const oy of [-SIZE, 0, SIZE]) {
+            context.beginPath();
+            context.moveTo(points[0][0] + ox, points[0][1] + oy);
+            for (let j = 1; j < points.length; j++) {
+              const [px, py] = points[j];
+              if (biome === 3 && j < points.length - 1) {
+                const next = points[j + 1];
+                context.quadraticCurveTo(
+                  px + ox,
+                  py + oy,
+                  (px + next[0]) / 2 + ox,
+                  (py + next[1]) / 2 + oy,
+                );
+              } else context.lineTo(px + ox, py + oy);
+            }
+            context.stroke();
+          }
       }
-      if (biome === 1) {
-        c.strokeStyle = '#ffffff88';
-        c.lineWidth = 1;
-        c.beginPath();
-        c.moveTo(x - 1, y - 2);
-        c.lineTo(x + 12, y + 6);
-        c.lineTo(x + 19, y + 42);
-        c.stroke();
+      if (depth > 0) {
+        const fork = points[3];
+        branch(
+          fork[0],
+          fork[1],
+          angle + 0.55 + randomAt(seed + 39) * 0.35,
+          reach * 0.54,
+          depth - 1,
+          seed + 117,
+        );
+        branch(x, y, angle - 0.45 - randomAt(seed + 63) * 0.4, reach * 0.62, depth - 1, seed + 229);
       }
+    };
+    for (let root = 0; root < 7; root++) {
+      const seed = root * 101 + biome * 31;
+      branch(
+        randomAt(seed) * SIZE,
+        randomAt(seed + 13) * SIZE,
+        randomAt(seed + 41) * Math.PI * 2,
+        70 + randomAt(seed + 17) * 80,
+        2,
+        seed,
+      );
     }
   } else {
     // Alloy panel seams, fasteners, and inset luminous guide strips.
@@ -150,7 +206,7 @@ export function biomeSurface(biome: number) {
     bumpMap: texture(source.height, false),
     emissiveMap: source.glow ? texture(source.glow, true) : null,
     bumpScale: [0.21, 0.09, 0.18, 0.13, 0.07][biome],
-    metalness: [0.1, 0.52, 0.28, 0.06, 0.72][biome],
+    metalness: [0.1, 0.18, 0.28, 0.06, 0.72][biome],
     roughness: [0.94, 0.28, 0.84, 0.82, 0.46][biome],
     emissive: new T.Color(source.glow ? '#ffffff' : '#000000'),
     emissiveIntensity: [0, 0, 0.55, 0.45, 0.4][biome],

@@ -1,8 +1,8 @@
-import { chromium } from '@playwright/test';
+import { gameUrl, launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 await fs.mkdir('test-results', { recursive: true });
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await launchBrowser();
 const errors = [];
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -10,7 +10,7 @@ try {
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto(gameUrl());
   await page
     .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
     .waitFor({ timeout: 60000 });
@@ -62,6 +62,7 @@ try {
   await page.getByRole('button', { name: 'RESUME EXPEDITION' }).click();
   await page.waitForTimeout(250);
   assert.equal(await page.evaluate(() => window.__voidRunner.state.phase), 'playing');
+  await page.getByRole('button', { name: 'Pause game', exact: true }).click();
   await page.getByRole('button', { name: 'Flight manual', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__voidRunner.state.phase), 'paused');
   await page.keyboard.press('Escape');
@@ -187,7 +188,51 @@ try {
   await page.screenshot({ path: 'test-results/mobile.png' });
   await page.getByRole('button', { name: 'BEGIN EXPEDITION', exact: true }).click();
   await page.waitForTimeout(500);
-  await page.screenshot({ path: 'test-results/mobile-gameplay.png' });
+  await page.evaluate(() => {
+    const g = window.__voidRunner;
+    g.strike(g.current.x + 50);
+    g.step({ brake: false, boost: false, jump: false, fire: false, vent: false, pitch: 0 });
+    g.announce('CHECKPOINT RECOVERY · ROVER REPAIRED · SCORE RESTORED');
+    // Freeze only this layout fixture while motion and the rendered HUD keep updating.
+    g.step = () => {};
+  });
+  // Wait for the old notice to exit and the new motion animation to finish.
+  await page.waitForFunction(() => {
+    const banners = [...document.querySelectorAll('.notice, .warning-banner')];
+    return banners.length === 2 && banners.every((b) => Number(getComputedStyle(b).opacity) > 0.99);
+  });
+  const feedback = [];
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const layout = await page.evaluate(() => {
+      const rect = (element) => {
+        const { left, right, top, bottom } = element.getBoundingClientRect();
+        return { left, right, top, bottom };
+      };
+      return {
+        width: innerWidth,
+        caption: rect(document.querySelector('.sector-caption')),
+        controls: rect(document.querySelector('.touch-controls')),
+        banners: [...document.querySelectorAll('.notice, .warning-banner')].map((element) => ({
+          ...rect(element),
+          clipped: element.scrollWidth > element.clientWidth + 1,
+        })),
+      };
+    });
+    assert.equal(layout.banners.length, 2);
+    for (const banner of layout.banners) {
+      assert(banner.left >= 8 && banner.right <= width - 8, 'HUD feedback left the screen');
+      assert(Math.abs((banner.left + banner.right) / 2 - width / 2) < 1);
+      assert(!banner.clipped, 'HUD feedback text was clipped');
+      for (const area of [layout.caption, layout.controls])
+        assert(
+          banner.bottom <= area.top || banner.top >= area.bottom,
+          'HUD feedback covered controls or the biome caption',
+        );
+    }
+    feedback.push(layout);
+    await page.screenshot({ path: `test-results/mobile-gameplay-${width}.png` });
+  }
   console.log(
     'PASS driving, suspension, jump, hover, loadout, firing, pause, modal input, checkpoint, service, overheat, boss, completion, death, restart, responsive width',
   );
@@ -195,7 +240,7 @@ try {
   assert.deepEqual(errors, []);
   await fs.writeFile(
     'test-results/browser-results.json',
-    JSON.stringify({ driving, jump, result, scenarios, seam, errors }, null, 2),
+    JSON.stringify({ driving, jump, result, scenarios, seam, feedback, errors }, null, 2),
   );
 } finally {
   await browser.close();

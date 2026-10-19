@@ -1,4 +1,4 @@
-import { chromium } from '@playwright/test';
+import { gameUrl, launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -6,19 +6,19 @@ import os from 'node:os';
 await fs.mkdir('test-results', { recursive: true });
 const label = process.argv[2] ?? 'current';
 assert(/^[a-z0-9-]+$/i.test(label), 'Use a simple capture label');
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await launchBrowser();
 const results = [];
 try {
-  for (const mode of ['webgpu', 'webgl']) {
-    // Header/footer consume 104px; this produces a native 1920x1080 canvas.
-    const page = await browser.newPage({ viewport: { width: 1920, height: 1184 } });
+  for (const mode of process.env.BACKEND ? [process.env.BACKEND] : ['webgpu', 'webgl']) {
+    // The game now fills the viewport; this produces a native 1920x1080 canvas.
+    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
     await page.goto(
-      'http://127.0.0.1:5173/?quality=balanced' + (mode === 'webgl' ? '&renderer=webgl' : ''),
+      gameUrl({ quality: 'balanced', renderer: mode === 'webgl' ? 'webgl' : undefined }),
     );
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })

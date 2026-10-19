@@ -1,9 +1,9 @@
-import { chromium } from '@playwright/test';
+import { gameUrl, launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 await fs.mkdir('test-results', { recursive: true });
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await launchBrowser();
 const results = [];
 const frames = (page, count = 6) =>
   page.evaluate(
@@ -15,7 +15,7 @@ const frames = (page, count = 6) =>
     count,
   );
 try {
-  for (const mode of ['webgpu', 'webgl']) {
+  for (const mode of process.env.BACKEND ? [process.env.BACKEND] : ['webgpu', 'webgl']) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
@@ -23,11 +23,15 @@ try {
       if (m.type() === 'error') errors.push(m.text());
     });
     await page.goto(
-      'http://127.0.0.1:5173/?quality=balanced' + (mode === 'webgl' ? '&renderer=webgl' : ''),
+      gameUrl({ quality: 'balanced', renderer: mode === 'webgl' ? 'webgl' : undefined }),
     );
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .waitFor({ timeout: 90000 });
+    assert.equal(
+      await page.evaluate(() => window.__voidRunner.state.backend),
+      mode === 'webgl' ? 'WEBGL 2' : 'WEBGPU',
+    );
     await page.getByRole('button', { name: 'CONFIGURE ROVER' }).click();
     await page.getByRole('button', { name: /Resonance Beam/ }).click();
     await page.getByRole('button', { name: /Tachyon Railgun/ }).click();
@@ -148,7 +152,7 @@ try {
     });
     assert.equal(rail.charge, 1);
     assert.equal(rail.kills, 2);
-    assert(rail.after[0] <= 0 && rail.after[1] <= 0 && rail.after[2] === 2);
+    assert(rail.after[0] <= 0 && rail.after[1] <= 0 && rail.after[2] === rail.before[2]);
     assert(rail.flash > 0);
     assert.equal(rail.railShots, 0);
     await frames(page);

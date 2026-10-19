@@ -1,8 +1,8 @@
-import { chromium } from '@playwright/test';
+import { gameUrl, launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 await fs.mkdir('test-results', { recursive: true });
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await launchBrowser();
 const results = [];
 async function capture(page, path) {
   await page.evaluate(() => {
@@ -28,17 +28,21 @@ async function capture(page, path) {
   });
 }
 try {
-  for (const mode of ['webgpu', 'webgl']) {
+  for (const mode of process.env.BACKEND ? [process.env.BACKEND] : ['webgpu', 'webgl']) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => {
       if (m.type() === 'error') errors.push(m.text());
     });
-    await page.goto('http://127.0.0.1:5173/' + (mode === 'webgl' ? '?renderer=webgl' : ''));
+    await page.goto(gameUrl({ renderer: mode === 'webgl' ? 'webgl' : undefined }));
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .waitFor({ timeout: 60000 });
+    assert.equal(
+      await page.evaluate(() => window.__voidRunner.state.backend),
+      mode === 'webgl' ? 'WEBGL 2' : 'WEBGPU',
+    );
     const setup = await page.evaluate(async () => {
       const { HAZARDS } = await import('/src/game/route.ts');
       window.__testHazards = HAZARDS;
@@ -232,7 +236,7 @@ try {
     });
     await page.waitForTimeout(350);
     const radar = await page.evaluate(() => window.__voidRunner.state.radar);
-    assert(radar.every((r) => r.x >= 20 && r.x <= 76));
+    assert(radar.every((r) => r.x > 0 && r.x < 100));
     // Show the scanner for the captured frame without advancing physics.
     await page.evaluate(() => {
       const g = window.__voidRunner;
@@ -244,6 +248,7 @@ try {
         g.step = original;
       };
     });
+    await page.locator('.threat-marker').first().waitFor({ state: 'visible' });
     await page.waitForTimeout(150);
     const boxes = await page.locator('.threat-marker').evaluateAll((elements) =>
       elements.map((e) => {

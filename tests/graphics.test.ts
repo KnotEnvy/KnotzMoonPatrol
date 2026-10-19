@@ -64,7 +64,8 @@ it('blends toward the dark chasm rig and restores lunar lighting without adding 
   const lighting = new BiomeLighting(scene, sun),
     position = new T.Vector3(3400, 2, 0);
   for (let i = 0; i < 300; i++) lighting.update(3, position, 1 / 60);
-  expect(sun.intensity).toBeLessThan(0.61);
+  expect(sun.intensity).toBeCloseTo(1.7, 3);
+  expect(lighting.ambient.intensity).toBeCloseTo(1.6, 3);
   expect(lighting.headlight.intensity).toBeGreaterThan(359);
   expect(lighting.headlight.castShadow).toBe(false);
   expect(lighting.headlight.position.x).toBe(3402);

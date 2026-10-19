@@ -5,6 +5,7 @@ import { baseHeight } from './rules';
 import { box, mat, disposeGroup } from './models';
 import { batchStaticMeshes } from './render-batches';
 import { rayCircleDistance } from './weapons';
+import { detailHazard } from './hazard-detail';
 
 export interface HazardEffects {
   hurt: (amount: number) => void;
@@ -33,12 +34,28 @@ interface ActiveHazard extends HazardClock {
 }
 export class Hazards {
   private active = new Map<string, ActiveHazard>();
+  private prepared = new Map<string, ActiveHazard>();
   private retired = new Set<string>();
   private disposed = false;
   constructor(
     private scene: T.Scene,
     private world: RAPIER.World,
   ) {}
+  async prepare() {
+    for (const def of HAZARDS) {
+      if (this.disposed) return;
+      if (!this.prepared.has(def.id)) this.add(def);
+      const hazard = this.prepared.get(def.id)!;
+      if (hazard.collider) this.world.removeCollider(hazard.collider, true);
+      hazard.collider = undefined;
+      hazard.group.removeFromParent();
+      this.active.delete(def.id);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  }
+  get warmupGroups() {
+    return [...this.prepared.values()].map((h) => h.group);
+  }
   stream(x: number) {
     if (this.disposed) return;
     for (const def of HAZARDS)
@@ -52,13 +69,38 @@ export class Hazards {
     for (const [id, h] of this.active)
       if (h.def.x < x - 70 || h.def.x > x + 160) {
         if (h.collider) this.world.removeCollider(h.collider, true);
-        disposeGroup(h.group);
-        h.material.dispose();
+        h.collider = undefined;
+        h.group.removeFromParent();
         this.active.delete(id);
         this.retired.add(id);
       }
   }
   private add(def: HazardDefinition) {
+    const cached = this.prepared.get(def.id);
+    if (cached) {
+      Object.assign(cached, {
+        phase: 'idle',
+        remaining: 0,
+        hp: 4,
+        launched: false,
+        dropped: false,
+      });
+      cached.group.scale.setScalar(1);
+      cached.effect.position.set(0, 0, 0);
+      cached.effect.rotation.set(0, 0, 0);
+      cached.effect.scale.setScalar(1);
+      cached.effect.visible = !['vent', 'crystal', 'laser'].includes(def.kind);
+      cached.material.opacity = 0.65;
+      if (def.kind === 'plate')
+        cached.collider = this.world.createCollider(
+          RAPIER.ColliderDesc.cuboid(def.width / 2, 0.15, 4)
+            .setTranslation(def.x, cached.y, 0)
+            .setFriction(0.85),
+        );
+      this.scene.add(cached.group);
+      this.active.set(def.id, cached);
+      return;
+    }
     const group = new T.Group(),
       effect = new T.Group();
     const isGap = def.kind === 'plate' || def.kind === 'canopy';
@@ -81,7 +123,11 @@ export class Hazards {
       opacity: 0.65,
       depthWrite: false,
     });
-    const metal = mat('#3d505d', 0.6, 0.45),
+    const metal = mat(
+        def.kind === 'crystal' ? '#7895bc' : '#3d505d',
+        def.kind === 'crystal' ? 0.18 : 0.6,
+        def.kind === 'crystal' ? 0.32 : 0.45,
+      ),
       glow = mat(color, 0.4, 0.3, color);
     let collider: RAPIER.Collider | undefined;
     if (def.kind === 'plate') {
@@ -148,7 +194,7 @@ export class Hazards {
           def.kind === 'crystal'
             ? new T.OctahedronGeometry(1.2, 0)
             : new T.BoxGeometry(0.45, 3, 0.45),
-          glow,
+          metal,
         );
         pylon.position.set(0, 1.6, z);
         pylon.scale.y = def.kind === 'crystal' ? 2 : 1;
@@ -194,6 +240,7 @@ export class Hazards {
         effect.add(rock);
       }
     }
+    detailHazard(group, effect, def, metal, glow);
     batchStaticMeshes(group);
     batchStaticMeshes(effect);
     this.scene.add(group);
@@ -210,6 +257,7 @@ export class Hazards {
       launched: false,
       dropped: false,
     });
+    this.prepared.set(def.id, this.active.get(def.id)!);
   }
   step(dt: number, rover: { x: number; y: number; contacts: Set<number> }, fx: HazardEffects) {
     for (const h of this.active.values()) {
@@ -362,7 +410,7 @@ export class Hazards {
       .map((h) => ({
         id: h.def.id,
         x: h.def.x,
-        y: h.y + 2,
+        y: h.y + (h.def.kind === 'lowGravity' ? 10 : 5),
         label:
           h.phase === 'charging' && h.def.kind === 'plate'
             ? 'COLLAPSE ' + h.remaining.toFixed(1) + 's'
@@ -373,14 +421,19 @@ export class Hazards {
   reset() {
     for (const h of this.active.values()) {
       if (h.collider) this.world.removeCollider(h.collider, true);
-      disposeGroup(h.group);
-      h.material.dispose();
+      h.collider = undefined;
+      h.group.removeFromParent();
     }
     this.active.clear();
     this.retired.clear();
   }
   dispose() {
     this.reset();
+    for (const h of this.prepared.values()) {
+      disposeGroup(h.group);
+      h.material.dispose();
+    }
+    this.prepared.clear();
     this.disposed = true;
   }
 }

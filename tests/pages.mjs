@@ -1,4 +1,5 @@
-import { chromium, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -57,9 +58,7 @@ try {
     }
     assert(ready, 'Preview did not start: ' + serverLog);
   }
-  const channel =
-    process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
-  browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
+  browser = await launchBrowser();
   await fs.mkdir(path.join(root, 'test-results'), { recursive: true });
   for (const mode of ['auto', 'webgl']) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -102,9 +101,9 @@ try {
       assets.every((asset) => new URL(asset).pathname.startsWith(base.pathname)),
       'An asset escaped the Pages project path',
     );
+    await page.getByRole('button', { name: 'Graphics settings', exact: true }).click();
     const backend = await page.locator('.engine-label').innerText();
     if (mode === 'webgl') assert(backend.includes('WEBGL 2'));
-    await page.getByRole('button', { name: 'Graphics settings', exact: true }).click();
     for (const preset of ['Performance', 'Cinematic', 'Balanced']) {
       const choice = page.getByRole('button', { name: new RegExp('^' + preset) });
       await choice.click();
@@ -153,7 +152,7 @@ try {
     assert(heat > 0, 'Production fire input did not change the core heat');
     await page.keyboard.press('Escape');
     await page
-      .getByRole('dialog', { name: 'A moment of silence.' })
+      .getByRole('dialog', { name: 'Paused' })
       .waitFor({ state: 'visible', timeout: 15000 });
     const paused = await page.locator('.scoreboard > span').innerText();
     await page.waitForTimeout(200);

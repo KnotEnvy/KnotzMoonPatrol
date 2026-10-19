@@ -34,8 +34,9 @@ export class Graphics {
     }
   }
 
-  render(boost: boolean, trauma: number) {
-    this.fringe.value = Math.min(0.12, (boost ? 0.035 : 0) + trauma * 0.08);
+  render(trauma: number) {
+    // Speed changes keep the view stable; impacts retain their brief feedback.
+    this.fringe.value = Math.min(0.12, trauma * 0.08);
     // Count the scene, shadow, bloom, and final composite draws as one frame.
     this.renderer.info.reset();
     if (this.post) this.post.render();

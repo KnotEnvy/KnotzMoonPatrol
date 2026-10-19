@@ -1,5 +1,6 @@
 node_modules/
 dist/
+benchmark-dist/
 test-results/
 package-lock.json
 *.log
@@ -7,3 +8,4 @@ package-lock.json
 docs/PRD.md
 *.tsbuildinfo
 playwright-report/
+src/game/assets/*.json

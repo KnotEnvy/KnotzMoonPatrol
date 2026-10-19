@@ -1,9 +1,9 @@
-import { chromium } from '@playwright/test';
+import { gameUrl, launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 await fs.mkdir('test-results', { recursive: true });
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await launchBrowser();
 const results = [];
 const frames = (page, count = 12) =>
   page.evaluate(
@@ -15,7 +15,7 @@ const frames = (page, count = 12) =>
     count,
   );
 try {
-  for (const mode of ['webgpu', 'webgl']) {
+  for (const mode of process.env.BACKEND ? [process.env.BACKEND] : ['webgpu', 'webgl']) {
     const page = await browser.newPage({
       viewport: { width: 1280, height: 800 },
       deviceScaleFactor: 2,
@@ -25,12 +25,16 @@ try {
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
-    await page.goto('http://127.0.0.1:5173/' + (mode === 'webgl' ? '?renderer=webgl' : ''), {
+    await page.goto(gameUrl({ renderer: mode === 'webgl' ? 'webgl' : undefined }), {
       waitUntil: 'domcontentloaded',
     });
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .waitFor({ timeout: 90000 });
+    assert.equal(
+      await page.evaluate(() => window.__voidRunner.state.backend),
+      mode === 'webgl' ? 'WEBGL 2' : 'WEBGPU',
+    );
     await page.getByRole('button', { name: 'Graphics settings', exact: true }).click();
     const presets = [];
     for (const quality of ['performance', 'balanced', 'cinematic']) {
@@ -80,7 +84,7 @@ try {
     await page.keyboard.down('ShiftLeft');
     await page.waitForFunction(() => {
       const g = window.__voidRunner;
-      return g.camera.fov > 60 && g.state.capacitor < 100;
+      return g.state.capacitor < 98;
     });
     const boost = await page.evaluate(() => {
       const g = window.__voidRunner;
@@ -91,9 +95,9 @@ try {
         roverScreenX: g.current.clone().project(g.camera).x,
       };
     });
-    assert(boost.fov <= 65);
+    assert.equal(boost.fov, 48);
     assert(boost.roverScreenX < 0);
-    if (mode === 'webgpu') assert(boost.fringe > 0 && boost.fringe <= 0.12);
+    assert.equal(boost.fringe, 0, 'Boost must not distort the lens');
     await page.screenshot({
       path: `test-results/graphics-${mode}-boost.jpg`,
       type: 'jpeg',
@@ -112,8 +116,17 @@ try {
         g.current.set(x, 3, 0);
         g.previous.copy(g.current);
       }, x);
-      await page.waitForFunction((biome) => window.__voidRunner.state.biome === biome, biome);
-      await page.waitForTimeout(1800);
+      await page.waitForFunction(
+        ({ biome, sun }) => {
+          const g = window.__voidRunner;
+          return (
+            g.state.biome === biome &&
+            Math.abs(g.light.intensity - sun) < 0.15 &&
+            (biome !== 3 || g.lighting.headlight.intensity > 350)
+          );
+        },
+        { biome, sun: [4, 3.5, 2.5, 1.7, 3.2][biome] },
+      );
       const surface = await page.evaluate(() => {
         const g = window.__voidRunner,
           material = g.terrain.materials.get(g.state.biome);
@@ -139,7 +152,7 @@ try {
       assert(surface.chunks <= 7);
       assert(!surface.castsHeadlightShadow);
       if (biome === 3) {
-        assert(surface.sun < 0.9);
+        assert(surface.sun > 1.5 && surface.sun < 1.9);
         assert(surface.headlight > 320);
       }
       biomes.push(surface);
@@ -165,21 +178,22 @@ try {
     assert.equal(await page.evaluate(() => window.__voidRunner.state.phase), 'playing');
     // UI-only controlled phases: settings must not stack over another active dialog.
     for (const [phase, title] of [
-      ['report', 'Checkpoint secured.'],
-      ['dead', 'Signal lost.'],
-      ['complete', 'Beyond the void.'],
+      ['report', 'Checkpoint secured'],
+      ['dead', 'Rover destroyed'],
+      ['complete', 'Expedition complete'],
     ]) {
       await page.evaluate((phase) => {
         const g = window.__voidRunner;
         g.state.phase = phase;
         g.emit();
       }, phase);
-      await page.getByRole('dialog', { name: title }).waitFor({ state: 'visible' });
-      await page.getByRole('button', { name: 'Graphics settings', exact: true }).click();
+      const panel = page.getByRole('dialog', { name: title, exact: true });
+      await panel.waitFor({ state: 'visible' });
+      await panel.getByRole('button', { name: 'Graphics settings', exact: true }).click();
       await page.getByRole('dialog', { name: title }).waitFor({ state: 'detached' });
       assert.equal(await page.getByRole('dialog').count(), 1);
       await page.keyboard.press('Escape');
-      await page.getByRole('dialog', { name: 'Find your balance.' }).waitFor({ state: 'detached' });
+      await page.getByRole('dialog', { name: 'Graphics' }).waitFor({ state: 'detached' });
       await page.getByRole('dialog', { name: title }).waitFor({ state: 'visible' });
       assert.equal(await page.evaluate(() => window.__voidRunner.state.phase), phase);
     }

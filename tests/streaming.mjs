@@ -1,17 +1,17 @@
-import { chromium } from '@playwright/test';
+import { gameUrl, launchBrowser } from './helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await launchBrowser();
 const results = [];
 try {
-  for (const mode of ['webgpu', 'webgl']) {
+  for (const mode of process.env.BACKEND ? [process.env.BACKEND] : ['webgpu', 'webgl']) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } }),
       errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => {
       if (m.type() === 'error') errors.push(m.text());
     });
-    await page.goto('http://127.0.0.1:5173/' + (mode === 'webgl' ? '?renderer=webgl' : ''));
+    await page.goto(gameUrl({ renderer: mode === 'webgl' ? 'webgl' : undefined }));
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .click({ timeout: 60000 });

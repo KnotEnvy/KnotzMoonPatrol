@@ -1,7 +1,10 @@
 node_modules/
 dist/
+benchmark-dist/
 test-results/
 playwright-report/
+*.blend1
+*.blend2
 *.log
 .vite/
 
