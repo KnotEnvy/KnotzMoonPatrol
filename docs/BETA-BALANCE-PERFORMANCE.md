@@ -113,4 +113,14 @@ Final benchmark and Pages production builds pass, as do formatting and browser-s
 
 For an isolated production audit, build with `npm run build:benchmark`, run `npm run preview:benchmark`, then set `GAME_URL=http://127.0.0.1:4174/` and `RECOVERY=1` for `npm run test:full-run -- my-capture audit webgl`. Use `paced` and an available native backend on named target hardware for rendered frame measurements, with other game previews closed.
 
-The remaining long-run renderer/frame-pacing problem is still open. This continuation removes a measured collider cost and fixes feedback readability; it does not satisfy the sustained native-1080p 60 FPS gate. Publishing remains on hold, and all changes remain local.
+The remaining long-run renderer/frame-pacing problem is still open. This continuation removes a measured collider cost and fixes feedback readability; it does not satisfy the sustained native-1080p 60 FPS gate. The user later authorized merging the combined continuation to `main`; the strict 40 FPS acceptance gate remains open.
+
+## PR #4 performance gate carried into the October 17 continuation
+
+The production benchmark retains the strict 40 FPS full-route check as `npm run test:frame-floor`. It runs a normal-speed A–Z route with detailed graphics and audio at native 1920×1080 and fails if any sampled frame exceeds 25 ms. Short stress fixtures and profiled runs do not clear this gate.
+
+The October 15 420-second as-is capture completed both routes but failed the gate: WebGPU p95/max 66.8/432.9 ms with 63.33% of frames over 25 ms; WebGL 2 p95/max 99.9/5,033.3 ms with 67.36% over 25 ms. The user reported competing YouTube playback on NitroBliss and a substantially slower CPU than Superbeast, so these are shared-host observations and do not establish target-hardware performance. The next clean named-hardware run remains necessary.
+
+PR #4 also merged 256 m regional batching for static scenery and prepared/disabled route colliders. This October 17 integration preserves that batching and collider reuse while replacing its repeated primitive scenery with the Blender-authored environment kit and its terrain triangle collider with the grid-matched heightfield. The remote capture reduced geometry resources from 803 to 452 and fixed-fixture draws from 51/35 to 45/31 (WebGPU/WebGL); the heightfield collider fixture separately measured roughly 35× lower median CPU construction/removal cost than the previous triangle path. Those workload reductions do not establish a full-route frame-rate pass.
+
+On October 15 the user authorized merging this continuation to `main`; the repository's existing Pages workflow validates and deploys that branch. The merge preserves the recorded frame gate and its failure evidence for follow-up work.

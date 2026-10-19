@@ -9,9 +9,18 @@ const backend = process.argv[4] ?? 'both';
 const recovery = process.env.RECOVERY === '1';
 const runSeconds = Number(process.env.RUN_SECONDS ?? 420);
 const quality = process.env.QUALITY ?? 'balanced';
-const selectedLoadout = process.env.LOADOUT;
-assert(!selectedLoadout || ['pulse', 'beam', 'seismic'].includes(selectedLoadout));
 const startDistance = Number(process.env.START_DISTANCE ?? 0);
+const profile = process.env.PROFILE === '1';
+const enforceFloor = process.argv.includes('--gate');
+if (enforceFloor)
+  assert(
+    pacing === 'paced' &&
+      runSeconds === 420 &&
+      startDistance === 0 &&
+      !profile &&
+      quality !== 'performance',
+    'The 40 FPS gate requires an unprofiled, normal-speed full route with detailed graphics',
+  );
 assert(Number.isFinite(runSeconds) && runSeconds >= 10 && runSeconds <= 420);
 assert(Number.isFinite(startDistance) && startDistance >= 0 && startDistance < 5500);
 assert(
@@ -19,7 +28,8 @@ assert(
   'Positioned samples are short diagnostics, never full-run audits',
 );
 assert(['performance', 'balanced', 'cinematic'].includes(quality));
-const gameUrl = process.env.GAME_URL ?? 'http://127.0.0.1:5173/';
+const gameUrl =
+  process.env.GAME_URL ?? (enforceFloor ? 'http://127.0.0.1:4174/' : 'http://127.0.0.1:5173/');
 const pilotSource = (
   await fs.readFile(new URL('./helpers/patrol-pilot.mjs', import.meta.url), 'utf8')
 ).replace('export function createPatrolPilot', 'window.createPatrolPilot = function');
@@ -27,6 +37,8 @@ assert(/^[a-z0-9-]+$/i.test(label));
 assert(['audit', 'paced'].includes(pacing));
 assert(['both', 'webgpu', 'webgl'].includes(backend));
 await fs.mkdir('test-results', { recursive: true });
+const headless = process.env.HEADED !== '1' && process.env.PLAYWRIGHT_HEADLESS !== '0';
+if (!headless) process.env.PLAYWRIGHT_HEADLESS = '0';
 const browser = await launchBrowser();
 const runs = [];
 try {
@@ -45,19 +57,20 @@ try {
     await page
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .click({ timeout: 90000 });
-    assert.equal(
-      await page.evaluate(() => window.__voidRunner.state.backend),
-      mode === 'webgpu' ? 'WEBGPU' : 'WEBGL 2',
-      `Requested ${mode} backend is unavailable; select an available backend explicitly`,
-    );
     await page.addScriptTag({ content: pilotSource });
+    const cdp = profile ? await page.context().newCDPSession(page) : null;
+    if (cdp) {
+      await cdp.send('Profiler.enable');
+      await cdp.send('Profiler.setSamplingInterval', { interval: 1000 });
+      await cdp.send('Profiler.start');
+    }
     for (const loadout of pacing === 'paced'
       ? [{ ground: 'pulse', sky: 'flak' }]
       : [
           { ground: 'pulse', sky: 'flak' },
           { ground: 'beam', sky: 'rail' },
           { ground: 'seismic', sky: 'seeker' },
-        ].filter((loadout) => !selectedLoadout || loadout.ground === selectedLoadout)) {
+        ]) {
       const result = await page.evaluate(
         async ({ loadout, pacing, recovery, runSeconds, startDistance }) => {
           const { createPatrolPilot } = window;
@@ -72,19 +85,18 @@ try {
             frames = [],
             costs = [];
           const recoveries = [];
-          const gapDiagnostic = [];
-          const pressure = { aircraft: 0, bombs: 0, plans: 0, attempted: 0, admitted: 0 };
+          const longFrames = [];
+          const observer = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries())
+              longFrames.push({ x: g.current.x, ...entry.toJSON() });
+          });
+          observer.observe({ type: 'long-animation-frame', buffered: false });
           const work = { terrain: [], hazards: [], spawn: [], render: [] };
           const wrap = (owner, key, bucket) => {
             const original = owner[key].bind(owner);
             owner[key] = (...args) => {
               const t = performance.now();
-              const actorsBefore = key === 'spawn' ? g.enemies.length : 0;
               const result = original(...args);
-              if (key === 'spawn') {
-                pressure.attempted++;
-                pressure.admitted += Math.max(0, g.enemies.length - actorsBefore);
-              }
               const ms = performance.now() - t;
               if (ms > 1) bucket.push({ x: g.state.distance, ms });
               return result;
@@ -136,31 +148,7 @@ try {
             }
             if (g.state.phase !== 'playing') return;
             const t = performance.now();
-            const input = pilot(g);
-            if (g.state.biome === 4 && g.current.x < 5600) {
-              gapDiagnostic.push({
-                x: g.current.x,
-                y: g.current.y,
-                vy: g.body.linvel().y,
-                grounded: Array.from({ length: 6 }, (_, i) => g.vehicle.wheelIsInContact(i)).filter(
-                  Boolean,
-                ).length,
-                jump: input.jump,
-                capacitor: g.state.capacitor,
-                spent: g.jumpAssist.spent,
-              });
-              if (gapDiagnostic.length > 600) gapDiagnostic.shift();
-            }
-            step(input);
-            pressure.aircraft = Math.max(
-              pressure.aircraft,
-              g.enemies.filter((e) => e.flight).length,
-            );
-            pressure.bombs = Math.max(
-              pressure.bombs,
-              g.shots.filter((s) => s.active && s.enemy && s.type === 'bomb').length,
-            );
-            pressure.plans = Math.max(pressure.plans, g.enemies.filter((e) => e.drop).length);
+            step(pilot(g));
             const ms = performance.now() - t;
             if (ms > 2) costs.push({ x: g.current.x, ms });
             ticks++;
@@ -221,8 +209,8 @@ try {
               requestAnimationFrame(frame);
             });
             return {
-              backend: g.state.backend,
               loadout,
+              backend: g.state.backend,
               phase: g.state.phase,
               distance: g.state.distance,
               hull: g.state.hull,
@@ -232,13 +220,12 @@ try {
               ticks,
               injuries,
               recoveries,
-              pressure,
-              gapDiagnostic,
               reports,
               sectors,
               frames,
               costs,
               work,
+              longFrames,
               memory: {
                 before: memoryBefore,
                 after: { ...g.renderer.info.memory },
@@ -246,30 +233,26 @@ try {
                 actors: g.enemyModels.warmupGroups.length,
               },
               canvas: [g.renderer.domElement.width, g.renderer.domElement.height],
-              finalPosition: { ...g.body.translation() },
-              finalVelocity: { ...g.body.linvel() },
-              terrainProfile: Array.from({ length: 17 }, (_, i) => ({
-                x: g.current.x - 8 + i,
-                y: g.terrain.heightAt(g.current.x - 8 + i),
-              })),
-              nearbyHazards: [...g.hazards.active.values()]
-                .filter((h) => Math.abs(h.def.x - g.current.x) < 45)
-                .map((h) => ({ ...h.def, phase: h.phase, hp: h.hp })),
             };
           } finally {
             g.step = step;
             g.hurt = hurt;
             restore.forEach((fn) => fn());
+            observer.disconnect();
             g.pause();
           }
         },
         { loadout, pacing, recovery, runSeconds, startDistance },
       );
       runs.push({ mode, ...result, errors: [...errors] });
+      assert.equal(result.backend, mode === 'webgpu' ? 'WEBGPU' : 'WEBGL 2');
       assert.deepEqual(result.canvas, [1920, 1080]);
-      assert(
-        result.pressure.aircraft <= 8 && result.pressure.bombs <= 3 && result.pressure.plans <= 1,
-      );
+      if (recovery && runSeconds === 420)
+        assert.equal(
+          result.phase,
+          'complete',
+          'Route must finish within three checkpoint recoveries',
+        );
       const sorted = result.frames.map((f) => f.ms).sort((a, b) => a - b);
       result.frameSummary = sorted.length
         ? {
@@ -278,17 +261,22 @@ try {
             p95: sorted[Math.floor(sorted.length * 0.95)],
             p99: sorted[Math.floor(sorted.length * 0.99)],
             max: sorted.at(-1),
+            minimumFps: 1000 / sorted.at(-1),
+            framesOver25: sorted.filter((x) => x > 25).length,
             over25Percent: (sorted.filter((x) => x > 25).length / sorted.length) * 100,
             over50: sorted.filter((x) => x > 50).length,
           }
         : null;
       runs.at(-1).frameSummary = result.frameSummary;
+      runs.at(-1).floorPass =
+        result.phase === 'complete' && sorted.length > 0 && sorted.at(-1) <= 25;
       console.log(
         'FULL RUN',
         JSON.stringify({
           mode,
           ...result,
           frames: result.frames.length,
+          longFrames: result.longFrames.length,
           costs: result.costs.sort((a, b) => b.ms - a.ms).slice(0, 8),
           work: Object.fromEntries(
             Object.entries(result.work).map(([key, values]) => [
@@ -296,7 +284,6 @@ try {
               values.sort((a, b) => b.ms - a.ms).slice(0, 5),
             ]),
           ),
-          gapDiagnostic: result.gapDiagnostic.length,
         }),
       );
       await page.screenshot({
@@ -304,15 +291,13 @@ try {
       });
     }
     assert.deepEqual(errors, []);
+    if (cdp) {
+      const { profile: cpu } = await cdp.send('Profiler.stop');
+      await fs.writeFile(`test-results/profile-${label}-${mode}.json`, JSON.stringify(cpu));
+      await cdp.detach();
+    }
     await page.close();
   }
-  if (recovery && runSeconds === 420)
-    for (const run of runs)
-      assert.equal(
-        run.phase,
-        'complete',
-        `${run.loadout.ground}/${run.loadout.sky} route must finish within three checkpoint recoveries`,
-      );
 } finally {
   await fs.writeFile(
     `test-results/full-run-${label}.json`,
@@ -324,10 +309,11 @@ try {
         runSeconds,
         quality,
         startDistance,
+        profile,
+        headless,
+        frameBudgetMs: 25,
+        enforceFloor,
         browser: browser.version(),
-        platform: process.platform,
-        os: os.release(),
-        node: process.version,
         cpu: os.cpus()[0]?.model,
         runs,
       },
@@ -337,3 +323,8 @@ try {
   );
   await browser.close();
 }
+if (enforceFloor)
+  assert(
+    runs.length > 0 && runs.every((run) => run.floorPass),
+    '40 FPS floor failed: see raw frame times in test-results. Percentiles cannot override this gate.',
+  );

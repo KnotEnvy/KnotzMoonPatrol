@@ -62,7 +62,7 @@ The five surface sets and shared lighting/headlights distinguish the biomes. The
 
 ## Working boundaries
 
-Visible terrain and colliders stream about 90 units behind and 200 ahead. The [beta performance pass](BETA-BALANCE-PERFORMANCE.md) prepares the finite route during loading and retains its 95 chunk groups until the game is disposed. Add scenery to its owning chunk group so it leaves the scene with that chunk; keep world positions in the same coordinate space. Keep the driving lane and warnings clear. Restart restores cached geometry instead of reconstructing it.
+Visible terrain and colliders stream about 90 units behind and 200 ahead. The [beta performance pass](BETA-BALANCE-PERFORMANCE.md) prepares the finite route during loading and retains its 95 chunk groups until the game is disposed. The original terrain colliders are prepared disabled, then reused as chunks enter the active window; crater replacements are retired on reset. Static decorations, including the authored biome kits, are grouped into 256 m regions while deformable surfaces remain separate. Keep scenery in its world coordinate space and the driving lane and warnings clear. Restart restores cached geometry instead of reconstructing it.
 
 The playable surface and its Rapier collider must change together. Terrain now uses the grid-matched heightfield descriptor in `src/game/terrain-collider.ts`; update that descriptor and its triangle-equivalence tests if grid dimensions, vertex order, or triangle diagonals change. Do not replace `baseHeight` purely for appearance without updating the authored gap/hazard layout and physics tests. Bridge support, crater brushes, and gameplay probes depend on that contract.
 

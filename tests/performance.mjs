@@ -13,6 +13,12 @@ assert(Number.isInteger(frameCount) && frameCount >= 240 && frameCount <= 3600);
 assert(/^[a-z0-9-]+$/i.test(label), 'Use a simple filename label');
 assert(['performance', 'balanced', 'cinematic'].includes(quality), 'Use a valid graphics preset');
 assert(['idle', 'weapons'].includes(scenario), 'Use idle or weapons');
+const headless = process.env.HEADED !== '1' && process.env.PLAYWRIGHT_HEADLESS !== '0';
+if (!headless) process.env.PLAYWRIGHT_HEADLESS = '0';
+const gpuProfile = process.env.GPU_PROFILE === '1';
+const quiet = process.env.QUIET === '1';
+const bundles = process.env.BUNDLES === '1';
+const uiSweep = process.env.UI_SWEEP === '1';
 const browser = await launchBrowser();
 const results = [];
 try {
@@ -37,8 +43,80 @@ try {
       .getByRole('button', { name: 'BEGIN EXPEDITION', exact: true })
       .click({ timeout: 60000 });
     const metrics = await page.evaluate(
-      async ({ scenario, frameCount }) => {
+      async ({ scenario, frameCount, gpuProfile, quiet, bundles, uiSweep }) => {
         const g = window.__voidRunner;
+        const uiModes = uiSweep
+          ? [
+              'normal',
+              'visual',
+              'normal',
+              'telemetry',
+              'normal',
+              'audio',
+              'normal',
+              'grain',
+              'normal',
+            ]
+          : ['normal'];
+        const uiFrames = uiModes.map((mode) => ({ mode, frames: [] }));
+        const uiElements = [...document.querySelectorAll('.app > :not(.scene)')].map((element) => ({
+          element,
+          display: element.style.display,
+        }));
+        const onState = g.onState,
+          audioUpdate = g.audio.update,
+          audioEnabled = g.audio.enabled;
+        const setUi = (mode) => {
+          g.onState = mode === 'telemetry' ? () => {} : onState;
+          g.audio.enabled = mode === 'audio' ? false : audioEnabled;
+          g.audio.update = mode === 'audio' ? () => {} : audioUpdate;
+          for (const { element, display } of uiElements)
+            element.style.display =
+              mode === 'visual' || (mode === 'grain' && element.classList.contains('grain'))
+                ? 'none'
+                : display;
+        };
+        if (bundles)
+          for (const region of g.terrain.sceneryRegions.values()) {
+            // Diagnostic equivalent of THREE.BundleGroup; no shipping behavior changes.
+            region.isBundleGroup = true;
+            region.static = true;
+            region.version = 0;
+            region.traverse((object) => {
+              object.frustumCulled = false;
+            });
+          }
+        const gpuMs = [],
+          renderCpuMs = [];
+        let pending = false;
+        if (gpuProfile && g.renderer.backend.device?.features.has('timestamp-query'))
+          g.renderer.backend.trackTimestamp = true;
+        const render = g.graphics.render.bind(g.graphics);
+        if (gpuProfile)
+          g.graphics.render = (...args) => {
+            const start = performance.now();
+            render(...args);
+            renderCpuMs.push(performance.now() - start);
+            if (g.renderer.backend.trackTimestamp && !pending) {
+              pending = true;
+              g.renderer
+                .resolveTimestampsAsync()
+                .then((ms) => {
+                  if (ms !== undefined) gpuMs.push(ms);
+                })
+                .finally(() => {
+                  pending = false;
+                });
+            }
+          };
+        if (quiet) {
+          g.onState = () => {};
+          g.audio.enabled = false;
+          g.audio.update = () => {};
+          document.querySelectorAll('.app > :not(.scene)').forEach((element) => {
+            element.style.display = 'none';
+          });
+        }
         g.invulnerable = 999;
         g.spawnAt = Infinity;
         const originalStep = g.step.bind(g);
@@ -110,9 +188,17 @@ try {
         let previous,
           ticks = 0;
         await new Promise((resolve) => {
+          let stage = 0,
+            stageTick = 0;
           const tick = (now) => {
             if (ticks++ >= 90 && previous !== undefined) {
+              if (uiSweep && stageTick++ < 30) {
+                previous = now;
+                requestAnimationFrame(tick);
+                return;
+              }
               frames.push(now - previous);
+              uiFrames[stage].frames.push(now - previous);
               shots.push(g.shots.filter((s) => s.active).length);
               particles.push(g.particles.filter((p) => p.life > 0).length);
               // render.calls is cumulative in Three r180; drawCalls is per frame.
@@ -120,9 +206,14 @@ try {
               geometries.push(g.renderer.info.memory.geometries);
               energy.push(g.weaponEffects.energy.count);
               slag.push(g.weaponEffects.slag.count);
+              if (uiFrames[stage].frames.length === frameCount && stage < uiModes.length - 1) {
+                stage++;
+                stageTick = 0;
+                setUi(uiModes[stage]);
+              }
             }
             previous = now;
-            if (frames.length < frameCount) requestAnimationFrame(tick);
+            if (frames.length < frameCount * uiModes.length) requestAnimationFrame(tick);
             else resolve();
           };
           requestAnimationFrame(tick);
@@ -166,9 +257,14 @@ try {
           energyInstances: summarize(energy),
           slagInstances: summarize(slag),
           rawFrameMs: frames,
+          gpuMs: gpuMs.length ? summarize(gpuMs) : null,
+          renderCpuMs: renderCpuMs.length ? summarize(renderCpuMs) : null,
+          uiSweep: uiSweep
+            ? uiFrames.map(({ mode, frames }) => ({ mode, frameMs: summarize(frames) }))
+            : null,
         };
       },
-      { scenario, frameCount },
+      { scenario, frameCount, gpuProfile, quiet, bundles, uiSweep },
     );
     assert.equal(metrics.backend, mode === 'webgpu' ? 'WEBGPU' : 'WEBGL 2');
     assert.equal(metrics.quality, quality);
@@ -191,6 +287,11 @@ try {
     JSON.stringify(
       {
         capturedAt: new Date().toISOString(),
+        headless,
+        gpuProfile,
+        quiet,
+        bundles,
+        uiSweep,
         browser: browser.version(),
         machine: {
           cpu: os.cpus()[0]?.model,

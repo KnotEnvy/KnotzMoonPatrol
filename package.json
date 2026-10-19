@@ -20,6 +20,7 @@
     "test:patrol": "node tests/patrol.mjs",
     "test:classic": "node tests/classic-combat.mjs",
     "test:full-run": "node tests/full-run.mjs",
+    "test:frame-floor": "node tests/full-run.mjs frame-floor paced both --gate",
     "test:recovery": "node tests/beta-recovery.mjs",
     "build:benchmark": "tsc -b && vite build --mode benchmark",
     "preview:benchmark": "vite preview --mode benchmark --host 127.0.0.1 --port 4174 --strictPort",

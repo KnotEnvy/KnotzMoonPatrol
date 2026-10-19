@@ -16,13 +16,15 @@ interface Chunk {
   indices: Uint32Array;
   version: number;
 }
-type PreparedChunk = Omit<Chunk, 'collider'> & { original: Float32Array };
+type PreparedChunk = Chunk & { original: Float32Array; baseCollider: RAPIER.Collider };
 export class Terrain {
   private materials = new Map<number, T.MeshStandardMaterial>();
   private retainedMaterials = new Set<T.Material>();
   private chunks = new Map<number, Chunk>();
   private prepared = new Map<number, PreparedChunk>();
   private sceneryMaterials = new Map<string, T.MeshStandardMaterial>();
+  private sceneryRegions = new Map<number, T.Group>();
+  private visibleRegions = new Set<number>();
   private dirty = new Set<number>();
   private generation = 0;
   private disposed = false;
@@ -39,9 +41,30 @@ export class Terrain {
       if (!this.prepared.has(id)) this.prepared.set(id, this.build(id));
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
+    // Keep deformable 64 m terrain meshes separate while sharing static scenery
+    // across 256 m regions. Blender-authored props are included in these batches.
+    for (const chunk of this.prepared.values()) {
+      const regionId = Math.floor(chunk.id / 4);
+      let region = this.sceneryRegions.get(regionId);
+      if (!region) this.sceneryRegions.set(regionId, (region = new T.Group()));
+      for (const child of [...chunk.group.children]) if (child !== chunk.mesh) region.add(child);
+    }
+    for (const region of this.sceneryRegions.values()) {
+      batchStaticMeshes(region);
+      region.traverse((object) => {
+        if (object === region) return;
+        object.updateMatrix();
+        object.matrixAutoUpdate = false;
+      });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (this.disposed) return;
+    }
+    this.update(0);
   }
   warmupGroups() {
-    return [...this.prepared.values()].map((c) => c.group);
+    return [...this.prepared.values()]
+      .map((c) => c.group)
+      .concat([...this.sceneryRegions.values()]);
   }
   warmupViews() {
     const seen = new Set<number>();
@@ -52,7 +75,13 @@ export class Terrain {
         seen.add(biome);
         return true;
       })
-      .map((chunk) => ({ group: chunk.group, origin: chunk.id * 64 }));
+      .flatMap((chunk) => {
+        const views = [{ group: chunk.group, origin: chunk.id * 64 }];
+        const regionId = Math.floor(chunk.id / 4);
+        const scenery = this.sceneryRegions.get(regionId);
+        if (scenery) views.push({ group: scenery, origin: regionId * 256 });
+        return views;
+      });
   }
   private scenery(key: string, color: string, metalness = 0.15, roughness = 0.7, glow?: string) {
     let material = this.sceneryMaterials.get(key);
@@ -69,9 +98,23 @@ export class Terrain {
     for (let i = min; i <= max; i++) if (!this.chunks.has(i)) this.add(i);
     for (const [id, c] of this.chunks)
       if (id < min || id > max) {
-        this.world.removeCollider(c.collider, true);
+        c.collider.setEnabled(false);
         c.group.removeFromParent();
         this.chunks.delete(id);
+      }
+    const firstRegion = Math.floor(min / 4),
+      lastRegion = Math.floor(max / 4);
+    for (let id = firstRegion; id <= lastRegion; id++) {
+      const region = this.sceneryRegions.get(id);
+      if (region && !this.visibleRegions.has(id)) {
+        this.scene.add(region);
+        this.visibleRegions.add(id);
+      }
+    }
+    for (const id of this.visibleRegions)
+      if (id < firstRegion || id > lastRegion) {
+        this.sceneryRegions.get(id)?.removeFromParent();
+        this.visibleRegions.delete(id);
       }
   }
   private add(id: number) {
@@ -80,9 +123,9 @@ export class Terrain {
       prepared = this.build(id);
       this.prepared.set(id, prepared);
     }
-    const collider = this.world.createCollider(terrainCollider(prepared.vertices));
+    prepared.collider.setEnabled(true);
     this.scene.add(prepared.group);
-    this.chunks.set(id, { ...prepared, collider });
+    this.chunks.set(id, prepared);
   }
   private build(id: number): PreparedChunk {
     const group = new T.Group(),
@@ -152,6 +195,7 @@ export class Terrain {
       0.1,
       1,
     );
+    skirtMaterial.name = `terrain-cut-edge-biome-${surfaceBiome}`;
     skirtMaterial.vertexColors = true;
     const cutEdge = new T.Mesh(skirt, skirtMaterial);
     cutEdge.name = 'terrain-cut-edge';
@@ -179,7 +223,18 @@ export class Terrain {
     }
     // The deformable surface remains independent from decorative batches.
     batchStaticMeshes(group, new Set([mesh]));
-    return { id, group, mesh, vertices: v, original: v.slice(), indices: ix, version: 0 };
+    const collider = this.world.createCollider(terrainCollider(v).setEnabled(false));
+    return {
+      id,
+      group,
+      mesh,
+      vertices: v,
+      original: v.slice(),
+      indices: ix,
+      version: 0,
+      collider,
+      baseCollider: collider,
+    };
   }
   carve(x: number, y: number, radius = 5, depth = 5) {
     const generation = this.generation;
@@ -219,7 +274,9 @@ export class Terrain {
         // All brush jobs finish before any surface changes. Commit the mesh/collider
         // pair for every surviving chunk in one task, retaining GPU vertex buffers.
         for (const { chunk, vertices, collider } of replacements) {
-          this.world.removeCollider(chunk.collider, true);
+          if (chunk.collider === this.prepared.get(chunk.id)?.baseCollider)
+            chunk.collider.setEnabled(false);
+          else this.world.removeCollider(chunk.collider, true);
           chunk.collider = collider;
           chunk.vertices.set(vertices);
           chunk.mesh.geometry.getAttribute('position').needsUpdate = true;
@@ -245,13 +302,15 @@ export class Terrain {
   reset() {
     this.generation++;
     for (const c of this.chunks.values()) {
-      this.world.removeCollider(c.collider, true);
+      c.collider.setEnabled(false);
       c.group.removeFromParent();
     }
     this.chunks.clear();
     for (const id of this.dirty) {
       const chunk = this.prepared.get(id);
       if (!chunk) continue;
+      if (chunk.collider !== chunk.baseCollider) this.world.removeCollider(chunk.collider, true);
+      chunk.collider = chunk.baseCollider;
       chunk.vertices.set(chunk.original);
       chunk.mesh.geometry.getAttribute('position').needsUpdate = true;
       chunk.mesh.geometry.computeVertexNormals();
@@ -265,8 +324,17 @@ export class Terrain {
     const groups = new Set(
       [...this.prepared.values(), ...this.chunks.values()].map((c) => c.group),
     );
-    for (const c of this.chunks.values()) this.world.removeCollider(c.collider, true);
+    const colliders = new Set<RAPIER.Collider>();
+    for (const c of this.chunks.values()) colliders.add(c.collider);
+    for (const c of this.prepared.values()) {
+      colliders.add(c.collider);
+      colliders.add(c.baseCollider);
+    }
+    colliders.forEach((collider) => this.world.removeCollider(collider, true));
     groups.forEach((group) => disposeGroup(group, this.retainedMaterials));
+    this.sceneryRegions.forEach((group) => disposeGroup(group, this.retainedMaterials));
+    this.sceneryRegions.clear();
+    this.visibleRegions.clear();
     this.chunks.clear();
     this.prepared.clear();
     this.retainedMaterials.forEach(disposeMaterial);
