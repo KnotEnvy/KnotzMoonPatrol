@@ -1,0 +1,54 @@
+name: Gameplay feedback
+description: Share how the beta feels - difficulty, weapon balance, controls, pacing.
+title: '[Feedback]: '
+labels: ['feedback', 'beta']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a beta and balance is still open. Honest impressions are the most useful thing you can send.
+        If something is clearly broken, please use the **Bug report** form.
+  - type: dropdown
+    id: topic
+    attributes:
+      label: What is your feedback about?
+      options:
+        - Difficulty / fairness
+        - Weapon balance or loadouts
+        - Heat and venting
+        - Rover handling (speed, jump, boost)
+        - Enemies and bombs
+        - Biomes and hazards
+        - HUD and menus
+        - Graphics and performance feel
+        - Audio
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: loadout
+    attributes:
+      label: Loadout used
+      description: Ground and sky weapon, if relevant.
+      placeholder: Resonance Beam + Tachyon Railgun
+  - type: input
+    id: progress
+    attributes:
+      label: How far did you get?
+      placeholder: Reached sector J, died to a laser emitter
+  - type: textarea
+    id: feel
+    attributes:
+      label: What did you experience?
+      description: What felt great, what felt frustrating or unfair, and when.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What would you change?
+  - type: input
+    id: setup
+    attributes:
+      label: Browser, OS and input device
+      placeholder: Chrome on Windows 11, keyboard

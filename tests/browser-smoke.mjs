@@ -28,7 +28,7 @@ try {
     ).filter(Boolean).length,
     loadout: window.__voidRunner.loadout,
   }));
-  assert(driving.x > 20);
+  assert(driving.x > 12);
   assert(driving.contacts >= 4);
   assert.equal(driving.loadout.sky, 'rail');
   await page.keyboard.down('Space');

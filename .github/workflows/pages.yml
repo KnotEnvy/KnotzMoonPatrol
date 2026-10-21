@@ -37,6 +37,8 @@ jobs:
         run: npm test
       - name: Build for the Pages project path
         run: npm run build:pages
+      - name: Check SEO and social metadata
+        run: npm run test:seo
       - name: Install browser
         run: npx playwright install --with-deps chromium
       - name: Check the production game

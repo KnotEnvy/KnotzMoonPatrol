@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://knotenvy.github.io/KnotzMoonPatrol/sitemap.xml

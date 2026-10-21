@@ -38,7 +38,7 @@ export function landingQuality(
   airtime: number,
   intentional: boolean,
 ) {
-  return intentional && airtime > 0.3 && Math.abs(angle - slope) < 0.18 && downwardSpeed > -17;
+  return intentional && airtime > 0.3 && Math.abs(angle - slope) < 0.18 && downwardSpeed > -19;
 }
 export function terrainPitch(left: number, right: number, distance = 3.1) {
   return clamp(Math.atan2(right - left, distance), -0.349, 0.349);

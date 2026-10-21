@@ -1,56 +1,35 @@
-# Moon Patrol: Void Runner
+<div align="center">
 
-Playable 2.5D lunar vehicle-action prototype built from the [original PRD v2.0](docs/PRD.md).
+<a href="https://knotenvy.github.io/KnotzMoonPatrol/"><img src="public/og-void-runner.jpg" alt="Void Runner: a six-wheel lunar rover races under a giant cratered moon while enemy bombers close in" width="720" /></a>
 
-[GitHub Pages](https://knotenvy.github.io/KnotzMoonPatrol/) · [World-detail handoff](docs/WORLD-DETAIL-HANDOFF.md) · [Deployment guide](docs/DEPLOYMENT.md) · [Contributing](CONTRIBUTING.md)
+# VOID RUNNER
 
-## Run locally
+**Moon Patrol: Void Runner** — a modern remake of the arcade classic
 
-Use Node.js 24 (see `.nvmrc`) and a current WebGPU-capable browser. The development server binds only to localhost.
+## [▶ Play the beta](https://knotenvy.github.io/KnotzMoonPatrol/)
 
-```powershell
-npm ci
-npm run dev
-```
+Free, in your browser, no install. Version `v1.0.0-beta.1`.
 
-Open **http://127.0.0.1:5173** and choose **Begin Expedition**. Audio starts on that interaction.
-A WebGL 2 renderer and CPU terrain brush are available when WebGPU is unavailable.
-Use `http://127.0.0.1:5173/?renderer=webgl` to exercise that fallback explicitly.
+[![Deploy to GitHub Pages](https://github.com/KnotEnvy/KnotzMoonPatrol/actions/workflows/pages.yml/badge.svg)](https://github.com/KnotEnvy/KnotzMoonPatrol/actions/workflows/pages.yml)
+[![Latest release](https://img.shields.io/github/v/release/KnotEnvy/KnotzMoonPatrol?include_prereleases&label=release)](https://github.com/KnotEnvy/KnotzMoonPatrol/releases)
+![Status: beta](https://img.shields.io/badge/status-beta-orange)
 
-```powershell
-npm test
-npm run build
-npm run preview
-```
+</div>
 
-Browser checks use Microsoft Edge on Windows and Playwright Chromium elsewhere, with the development server already running. Install Chromium with `npx playwright install --with-deps chromium` when needed. `GAME_URL` selects a different server/port; `PLAYWRIGHT_CHANNEL` or `PLAYWRIGHT_EXECUTABLE_PATH` selects a browser. Set `PLAYWRIGHT_HEADLESS=0` for foreground captures.
+Void Runner is a 2.5D lunar rover action game and a modern remake of the 1982 arcade classic _Moon Patrol_. Drive a six-wheel patrol rover along an A–Z route through five biomes, jump craters and hazards, shoot forward and upward at the same time, and shoot down the bombers and saucers that carve fresh craters in the road ahead. It runs on Three.js (WebGPU with a WebGL 2 fallback), Rapier physics, React 19, Vite and TypeScript.
 
-```powershell
-npm run test:browser
-npm run test:streaming
-npm run test:hazards
-npm run test:graphics
-npm run test:weapons
-npm run test:classic
-npm run test:ui
-npm run test:terrain -- current
-npm run test:performance -- current
-```
+## Play the beta
 
-`npm run test:colliders -- current` compares terrain collider construction on the CPU using Node 24. It records timings in `test-results/`; it does not measure game frame rate.
+1. Open **<https://knotenvy.github.io/KnotzMoonPatrol/>**.
+2. Pick a ground weapon and a sky weapon, and start the run.
+3. Tell us how it felt, using the links under [Report bugs and give feedback](#report-bugs-and-give-feedback).
 
-## GitHub Pages
+### System requirements
 
-`main` is the integration/deployment branch. Pull requests run validation; successful pushes to `main` deploy the built game through GitHub Actions.
-
-```powershell
-npm run format:check
-npm test
-npm run build:pages
-npm run test:pages
-```
-
-The Pages build uses `/KnotzMoonPatrol/` while ordinary development stays at `/`. The production smoke test starts/stops its own preview server, checks the real project subpath, and verifies that developer controls are absent. See [deployment details](docs/DEPLOYMENT.md).
+- A desktop browser is recommended. Current **Chrome or Edge** gets the WebGPU renderer, which is the best-looking and best-tested path.
+- Browsers without WebGPU fall back to **WebGL 2** automatically. To force the fallback, add `?renderer=webgl` to the address: <https://knotenvy.github.io/KnotzMoonPatrol/?renderer=webgl>
+- Hardware acceleration enabled in your browser. A discrete or recent integrated GPU is recommended; if the frame rate is low, choose the Performance graphics preset.
+- Touch controls appear on narrow or coarse-pointer screens, but mobile hardware and physical gamepads have not been validated yet.
 
 ## Controls
 
@@ -84,7 +63,73 @@ npm run test:performance -- my-capture balanced
 
 See [the graphics pass](docs/GRAPHICS-PASS.md) and [measurements](docs/PERFORMANCE.md) for capabilities and open acceptance work.
 
-## What is playable
+## Report bugs and give feedback
+
+This is a beta, and feedback shapes the 1.0 release.
+
+- [Report a bug](https://github.com/KnotEnvy/KnotzMoonPatrol/issues/new?template=bug_report.yml): include browser, renderer (WebGPU or WebGL), graphics preset and steps to reproduce.
+- [Share gameplay feedback](https://github.com/KnotEnvy/KnotzMoonPatrol/issues/new?template=feedback.yml): difficulty, weapon balance, controls and feel.
+- See the [release notes](docs/RELEASE-NOTES-v1.0.0-beta.1.md) for known issues and the [changelog](CHANGELOG.md) for changes.
+
+---
+
+# For developers
+
+[World-detail handoff](docs/WORLD-DETAIL-HANDOFF.md) · [Deployment guide](docs/DEPLOYMENT.md) · [Contributing](CONTRIBUTING.md) · [Original PRD](docs/PRD.md)
+
+Moon Patrol: Void Runner was built from the [original PRD v2.0](docs/PRD.md).
+
+## Development
+
+### Run locally
+
+Use Node.js 24 (see `.nvmrc`) and a current WebGPU-capable browser. The development server binds only to localhost.
+
+```powershell
+npm ci
+npm run dev
+```
+
+Open **http://127.0.0.1:5173** and start a run from the title screen. Audio starts on that interaction.
+A WebGL 2 renderer and CPU terrain brush are available when WebGPU is unavailable.
+Use `http://127.0.0.1:5173/?renderer=webgl` to exercise that fallback explicitly.
+
+```powershell
+npm test
+npm run build
+npm run preview
+```
+
+Browser checks use Microsoft Edge on Windows and Playwright Chromium elsewhere, with the development server already running. Install Chromium with `npx playwright install --with-deps chromium` when needed. `GAME_URL` selects a different server/port; `PLAYWRIGHT_CHANNEL` or `PLAYWRIGHT_EXECUTABLE_PATH` selects a browser. Set `PLAYWRIGHT_HEADLESS=0` for foreground captures.
+
+```powershell
+npm run test:browser
+npm run test:streaming
+npm run test:hazards
+npm run test:graphics
+npm run test:weapons
+npm run test:classic
+npm run test:ui
+npm run test:terrain -- current
+npm run test:performance -- current
+```
+
+`npm run test:colliders -- current` compares terrain collider construction on the CPU using Node 24. It records timings in `test-results/`; it does not measure game frame rate.
+
+### GitHub Pages
+
+`main` is the integration/deployment branch. Pull requests run validation; successful pushes to `main` deploy the built game through GitHub Actions.
+
+```powershell
+npm run format:check
+npm test
+npm run build:pages
+npm run test:pages
+```
+
+The Pages build uses `/KnotzMoonPatrol/` while ordinary development stays at `/`. The production smoke test starts/stops its own preview server, checks the real project subpath, and verifies that developer controls are absent. See [deployment details](docs/DEPLOYMENT.md).
+
+### What is playable
 
 - Distance-authored A–Z route through five biome palettes and scenery sets; reports after E/J/O/T and a sector-Z mothership.
 - Six-wheel Rapier raycast suspension, fixed 60 Hz physics, arcade speed control, jump/hover/pitch, clean-landing bonuses.
@@ -105,7 +150,7 @@ The [title and HUD continuation](docs/TITLE-HUD-PASS.md) records the game-interf
 The [beta asset continuation](docs/BETA-ASSET-PASS.md) documents the Blender model libraries, reproducible rebuild command, geometry budgets and three-round critique evidence. Run `npm run assets:build` to regenerate assets with Blender; the Python generators are authoritative and overwrite the editable gallery files.
 The [steady camera and aerial combat continuation](docs/STEADY-CAMERA-COMBAT.md) records the latest player-feedback changes, critic rounds, and local playtest steps.
 
-## Architecture
+### Architecture
 
 | File                                                               | Responsibility                                                                      |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
@@ -127,7 +172,7 @@ The rover's horizontal speed uses an impulse servo for arcade handling; the six 
 
 The developer server and separate local benchmark build expose `window.__voidRunner` for browser tests. Ordinary production and Pages builds strip that hook. Scenario tests deliberately position the rover at checkpoints and the final arena to verify those transitions; they are not a substitute for a complete human playthrough.
 
-## Readiness
+### Readiness
 
 This is a working prototype, **not full PRD acceptance**. See [implementation status](docs/IMPLEMENTATION-STATUS.md) for implemented, simplified, and outstanding requirements.
 
