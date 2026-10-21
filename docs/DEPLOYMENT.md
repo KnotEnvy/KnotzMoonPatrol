@@ -15,10 +15,13 @@ npm ci
 npm run format:check
 npm test
 npm run build:pages
+npm run test:seo
 npm run test:pages
 ```
 
-The last command starts and stops its own production-preview server on port 4173. It checks the repository subpath, favicon and bundled assets, absence of developer controls, all three graphics presets, launch/movement/fire, pause/resume, and mobile layout. It then selects the Beam/Rail loadout and verifies visible full charge and release through the production UI. It runs normal renderer selection and forced WebGL fallback. On Windows it uses installed Edge; on Linux it uses Playwright Chromium.
+`npm run test:seo` inspects `dist/` (so run it after the build) for title/Open Graph/Twitter tags, the share image's real dimensions, JSON-LD, the web manifest, `robots.txt` and `sitemap.xml`. The CI workflow runs it before the browser check.
+
+The `test:pages` command starts and stops its own production-preview server on port 4173. It checks the repository subpath, favicon and bundled assets, absence of developer controls, all three graphics presets, launch/movement/fire, pause/resume, and mobile layout. It then selects the Beam/Rail loadout and verifies visible full charge and release through the production UI. It runs normal renderer selection and forced WebGL fallback. On Windows it uses installed Edge; on Linux it uses Playwright Chromium.
 
 For manual inspection:
 

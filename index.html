@@ -4,16 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1.0" />
     <meta name="theme-color" content="#080f18" />
+    <title>Void Runner — Moon Patrol Remake | Free Browser Game</title>
     <meta
       name="description"
       content="Take the wheel of a six-wheel lunar patrol rover. Blast through five hostile biomes, outfly enemy bombers, and survive the cratered route."
     />
+    <meta name="robots" content="index,follow" />
+    <meta name="author" content="KnotEnvy" />
+    <meta name="application-name" content="Void Runner" />
     <link rel="canonical" href="https://knotenvy.github.io/KnotzMoonPatrol/" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="manifest" href="%BASE_URL%site.webmanifest" />
     <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="VOID RUNNER / Moon Patrol" />
-    <meta property="og:title" content="VOID RUNNER — Moon Patrol" />
+    <meta property="og:site_name" content="Void Runner" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content="Void Runner — Moon Patrol Remake | Free Browser Game" />
     <meta
       property="og:description"
       content="Take the wheel of a six-wheel lunar patrol rover. Blast through five hostile biomes, outfly enemy bombers, and survive the cratered route."
@@ -21,6 +27,10 @@
     <meta property="og:url" content="https://knotenvy.github.io/KnotzMoonPatrol/" />
     <meta
       property="og:image"
+      content="https://knotenvy.github.io/KnotzMoonPatrol/og-void-runner.jpg"
+    />
+    <meta
+      property="og:image:secure_url"
       content="https://knotenvy.github.io/KnotzMoonPatrol/og-void-runner.jpg"
     />
     <meta property="og:image:type" content="image/jpeg" />
@@ -31,7 +41,7 @@
       content="A six-wheel lunar rover races across a moon under a giant cratered moon and enemy bombers."
     />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="VOID RUNNER — Moon Patrol" />
+    <meta name="twitter:title" content="Void Runner — Moon Patrol Remake | Free Browser Game" />
     <meta
       name="twitter:description"
       content="Take the wheel of a six-wheel lunar patrol rover. Blast through five hostile biomes, outfly enemy bombers, and survive the cratered route."
@@ -44,9 +54,37 @@
       name="twitter:image:alt"
       content="A six-wheel lunar rover races across a moon under a giant cratered moon and enemy bombers."
     />
-    <title>VOID RUNNER / Moon Patrol</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": ["VideoGame", "WebApplication"],
+        "name": "Void Runner — Moon Patrol Remake",
+        "alternateName": ["Moon Patrol: Void Runner", "VOID RUNNER"],
+        "url": "https://knotenvy.github.io/KnotzMoonPatrol/",
+        "image": "https://knotenvy.github.io/KnotzMoonPatrol/og-void-runner.jpg",
+        "description": "Take the wheel of a six-wheel lunar patrol rover. Blast through five hostile biomes, outfly enemy bombers, and survive the cratered route.",
+        "genre": ["Action", "Arcade", "Shooter"],
+        "gamePlatform": "Web browser",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any (modern browser with WebGPU or WebGL 2)",
+        "inLanguage": "en",
+        "softwareVersion": "1.0.0-beta.1",
+        "author": { "@type": "Person", "name": "KnotEnvy", "url": "https://github.com/KnotEnvy" },
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
   </head>
   <body>
+    <noscript>
+      <div style="padding: 2rem; font-family: sans-serif; color: #d9e4df; background: #080f18">
+        <h1>Void Runner — Moon Patrol Remake</h1>
+        <p>
+          Void Runner is a 2.5D lunar rover action game that runs in your browser. Please enable
+          JavaScript and use a current Chrome or Edge (WebGPU), or any browser with WebGL 2, to
+          play.
+        </p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

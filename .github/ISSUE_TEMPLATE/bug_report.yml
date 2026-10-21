@@ -1,0 +1,101 @@
+name: Bug report
+description: Something broke, looks wrong, or behaves unexpectedly in the beta.
+title: '[Bug]: '
+labels: ['bug', 'beta']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Void Runner. The more detail you give, the faster we can fix it.
+        For difficulty, balance or feel, please use the **Gameplay feedback** form instead.
+  - type: input
+    id: game-version
+    attributes:
+      label: Game version
+      description: For example v1.0.0-beta.1, or the date you played the hosted build.
+      placeholder: v1.0.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      description: For example Chrome 142, Edge 142, Firefox 140, Safari 18.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, macOS 15, Ubuntu 24.04, Android 15, iOS 18
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU (if known)
+      placeholder: NVIDIA GTX 1650 Ti, Apple M2, Intel UHD 630
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Renderer
+      description: Used ?renderer=webgl, or unsure? Pick the best match. In Chrome/Edge, chrome://gpu shows WebGPU status.
+      options:
+        - WebGPU
+        - WebGL 2 (automatic fallback)
+        - WebGL 2 (forced with ?renderer=webgl)
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: preset
+    attributes:
+      label: Graphics preset
+      options:
+        - Performance
+        - Balanced (default)
+        - Cinematic
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where did it happen?
+      options:
+        - Title screen / menus
+        - Driving / controls
+        - Weapons / heat
+        - Enemies / bombs / craters
+        - Biome hazards
+        - HUD / reports / pause
+        - Audio
+        - Performance / frame rate
+        - Other
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start with Pulse Vulcan + Flak Cannon
+        2. Drive to sector F
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshots, video or console errors
+      description: Drag and drop images or short clips here. Browser console errors (F12) are very helpful.

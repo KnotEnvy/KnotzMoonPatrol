@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Play Void Runner (beta)
+    url: https://knotenvy.github.io/KnotzMoonPatrol/
+    about: Play the latest hosted build in your browser before reporting an issue.
+  - name: Known issues and release notes
+    url: https://github.com/KnotEnvy/KnotzMoonPatrol/blob/main/docs/RELEASE-NOTES-v1.0.0-beta.1.md
+    about: Check the known issues list before filing a new report.

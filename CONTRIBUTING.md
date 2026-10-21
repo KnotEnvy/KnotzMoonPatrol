@@ -23,3 +23,7 @@ Browser suites use installed Edge on Windows and Playwright Chromium elsewhere. 
 Before proposing a world/detail change, inspect the game on desktop and a narrow viewport, exercise the affected biome/hazards, and record any measured performance changes. Update acceptance evidence only for checks actually performed.
 
 For model work, use [the beta asset pipeline](docs/BETA-ASSET-PASS.md). `npm run assets:build` regenerates the three libraries with Blender; Python scripts are authoritative and generated `.blend` edits are overwritten. Keep source hashes and geometry guards passing. `npm run assets:studio` and `npm run assets:scenes` produce source-matched local inspection evidence. `BACKEND=webgl` also limits streaming and performance fixtures; the performance fixtures now use the full-window 1920×1080 canvas.
+
+## Beta feedback and issues
+
+The hosted beta is at <https://knotenvy.github.io/KnotzMoonPatrol/>. Use the [bug report](https://github.com/KnotEnvy/KnotzMoonPatrol/issues/new?template=bug_report.yml) and [gameplay feedback](https://github.com/KnotEnvy/KnotzMoonPatrol/issues/new?template=feedback.yml) forms; include browser, renderer (WebGPU or WebGL 2) and graphics preset. Pull requests use the repository template. When `index.html` or `public/` changes, run `npm run build:pages` then `npm run test:seo`.
