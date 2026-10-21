@@ -1,5 +1,37 @@
 # Title screen and HUD continuation
 
+## October 21, 2026: arcade title and shared design system
+
+Owner feedback: the title read like a modern website. It now follows an 80s–90s arcade/console title screen rendered over the live 3D scene, and every other screen uses the same visual language.
+
+**Title screen** (`.title-screen`):
+
+- Top-centre `HI-SCORE` readout with a zero-padded six-digit score.
+- A `MOON PATROL` sub-mark above a chunky italic `VOID RUNNER` logo: cream chrome for VOID, orange for RUNNER (matching the share art), an extruded outline layer, and 80s cut lines across the lower half. The logo is single-line on wide screens and stacked on portrait phones.
+- A blinking `PRESS ENTER` prompt. Coarse pointers show `TAP TO START`, and tapping the prompt starts the run.
+- A compact, centred menu: Begin Expedition, Configure Rover, Graphics, Flight Manual. A ▶ ◀ cursor marks the selected item. Arrow keys, W/S, Home/End, and Enter navigate it. A mouse selects by hover, and touch works by tapping. With nothing focused, the cursor rests on Begin Expedition, which is what Enter does from the background.
+- A cyan status line that describes the selected item (route start, equipped loadout, graphics detail/backend, manual contents). It replaces the old loadout dock card. The equipped loadout is also exposed to screen readers as the description of Configure Rover.
+- Footer: an attract-mode ticker that cycles through the five biomes and three field tips, and the `© 2026 KNOTENVY · PUBLIC BETA` credit line.
+- CRT flavour: fine scanlines and a slow rolling scan band. The vignette darkens the menu column and leaves the rover lit.
+
+**Design tokens** (`:root` in `src/style.css`): `--ink/--ink-2/--ink-3` text tiers, `--amber` (selection and primary actions), `--cyan` (instruments and status), `--danger`, `--success`, panel fills and edges, glow and hard-shadow presets, and a type scale (`--fs-micro` 9 → `--fs-score` 72). Barlow Condensed is used for the logo, headings, menu items, and numerals. IBM Plex Mono is used for labels, data, and prompts. Barlow is reserved for the few prose lines. The 800-italic Barlow Condensed face is now bundled for the logo and panel titles.
+
+**Shared components:**
+
+- `.arcade-menu` is the cursor-selector menu used by the title and by every panel's actions (`.panel-actions`). The primary action carries the cursor until another option is hovered or focused. Panels also support Up/Down navigation, and Escape still resumes from Pause when a panel button is selected.
+- The `.panel` frame (thin edge plus corner brackets in the tone colour, set by `--bk`) is shared by dialogs, the error box, the telemetry cluster, weapon status, and notices. `tone-danger` (Rover destroyed) and `tone-success` (checkpoint, expedition complete) recolour the brackets, eyebrow, and title glow.
+- `.option-list` provides the selectable rows (diamond indicator, EQUIPPED/ACTIVE tag) used by both Rover Loadout and Graphics.
+- `.tally` is used for score tallies with dotted leaders (sector report and end screens). The end screens show a large zero-padded final score and blink `NEW HIGH SCORE` when the run beat the previous best.
+- Touch controls share one arcade-button style across layouts. Media queries now handle only sizing.
+
+**HUD:** the layout geometry is unchanged, so the overlap and aircraft-visibility checks still hold. Scores are now zero-padded (`SCORE` / `HI 052340`). Labels use amber, instruments are cyan-bracketed, the biome name is uppercase, and warnings use a red-amber treatment.
+
+**Motion:** under `prefers-reduced-motion`, blinking prompts, cursor twitch, the scan band, and the attract wipe stop, and framer-motion uses `MotionConfig reducedMotion="user"`.
+
+**Button text:** all existing button names and accessible labels are unchanged, including Begin Expedition, Configure Rover, Return to Base, and Recover at Checkpoint. The "Review equipped weapons" loadout-dock button was removed; its information moved to the status line and the Configure Rover description. `tests/ui.mjs` now checks that no title furniture covers the menu, and it also checks the W/S keys and the selection cursor.
+
+---
+
 October 17, 2026. Local work on `codex/classic-assets-gameplay`; pending human playtesting before integration or GitHub Pages publication.
 
 ## Direction and references
