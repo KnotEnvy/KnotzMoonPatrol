@@ -1,6 +1,6 @@
 {
   "name": "moon-patrol-void-runner",
-  "version": "0.1.0",
+  "version": "1.0.0-beta.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -27,6 +27,7 @@
     "build:pages": "tsc -b && vite build --mode pages",
     "preview:pages": "vite preview --mode pages --host 127.0.0.1",
     "test:pages": "node tests/pages.mjs",
+    "test:seo": "node scripts/check-seo.mjs",
     "format:check": "prettier --check .",
     "test:ui": "node tests/ui.mjs",
     "assets:build": "node scripts/build-assets.mjs",
