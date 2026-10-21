@@ -1,9 +1,15 @@
+import { GAP_WIDTH } from '../src/game/route';
 import { describe, it, expect } from 'vitest';
 import {
   initialTelemetry,
   updateEnergy,
   addHeat,
   checkpointBonus,
+  BIOMES,
+  CRUISE_SPEED,
+  effectiveGravityAt,
+  jumpSpeed,
+  VENT_RATE,
   biomeIndex,
   sectorIndex,
   FINISH,
@@ -58,9 +64,9 @@ describe('A to Z progression', () => {
     expect(biomeIndex(FINISH)).toBe(4);
   });
   it('awards no-damage and par-time bonuses only when earned', () => {
-    expect(checkpointBonus(70, 0, 0, 10)).toBe(0);
-    expect(checkpointBonus(70, 0, 0, 0)).toBe(1500);
-    expect(checkpointBonus(60, 2, 1, 0)).toBe(2450);
+    expect(checkpointBonus(90, 0, 0, 10)).toBe(0);
+    expect(checkpointBonus(90, 0, 0, 0)).toBe(1500);
+    expect(checkpointBonus(80, 2, 1, 0)).toBe(2450);
   });
   it('authors a safe starting runway and real traversable gaps', () => {
     expect(baseHeight(0)).toBeCloseTo(0);
@@ -80,5 +86,20 @@ describe('terrain deformation fallback', () => {
     expect(vertices[4]).toBe(0);
     const again = await compute.carve(result, 0, 2, 5, 2);
     expect(again[4]).toBe(-4);
+  });
+  it('keeps every authored gap clearable at cruise speed with a normal jump', () => {
+    for (const { gravity } of BIOMES) {
+      const up = jumpSpeed(gravity) / effectiveGravityAt(gravity, 1);
+      const apex = (jumpSpeed(gravity) * up) / 2;
+      const down = Math.sqrt((2 * apex) / effectiveGravityAt(gravity, -1));
+      const distance = (up + down) * CRUISE_SPEED;
+      expect(distance).toBeGreaterThan(GAP_WIDTH * 1.45);
+      expect(Math.sqrt(2 * effectiveGravityAt(gravity, -1) * apex)).toBeLessThan(17.5);
+    }
+  });
+  it('leaves low-gravity zones floaty and vents quickly', () => {
+    expect(effectiveGravityAt(3, -5)).toBe(3);
+    expect(jumpSpeed(3)).toBe(11.5);
+    expect(VENT_RATE).toBeGreaterThanOrEqual(90);
   });
 });

@@ -63,6 +63,12 @@ import {
   updateEnergy,
   addHeat,
   checkpointBonus,
+  CRUISE_SPEED,
+  BOOST_SPEED,
+  SKY_SHOT_SPEED,
+  SEEKER_HOMING_SPEED,
+  jumpSpeed,
+  effectiveGravityAt,
 } from './rules';
 
 type EnemyKind =
@@ -105,6 +111,7 @@ interface Particle {
   vz: number;
   life: number;
   max: number;
+  steam?: boolean;
 }
 interface Strike {
   x: number;
@@ -142,6 +149,8 @@ export class Game {
   private enemyModels = new EnemyModels();
   private launched = false;
   private landingBoost = 0;
+  private steamTimer = 0;
+  private wasLocked = false;
   private tutorialStage = 0;
   private hazardEffects: HazardEffects = {
     hurt: (amount) => this.hurt(amount),
@@ -616,7 +625,7 @@ export class Game {
       fps: this.state.fps,
     };
     this.body.setTranslation({ x: 0, y: 2, z: 0 }, true);
-    this.body.setLinvel({ x: 18, y: 0, z: 0 }, true);
+    this.body.setLinvel({ x: CRUISE_SPEED, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
     this.previous.set(0, 2, 0);
@@ -704,7 +713,7 @@ export class Game {
       radar: [],
       warning: '',
       distance: saved.x,
-      speed: 18,
+      speed: CRUISE_SPEED,
     };
     this.terrain.update(saved.x);
     this.hazards.stream(saved.x);
@@ -841,26 +850,36 @@ export class Game {
       this.launched = false;
     }
     this.lastGrounded = grounded;
+    const effectiveGravity = effectiveGravityAt(gravity, v.y);
     const { boosting, hovering } = updateEnergy(s, input, !grounded && this.jumpHeld > 0.16, dt);
-    const target = input.brake ? 8 : boosting ? 36 : this.landingBoost > 0 ? 24 : 20;
+    const target = input.brake
+      ? CRUISE_SPEED * 0.4
+      : boosting
+        ? BOOST_SPEED
+        : this.landingBoost > 0
+          ? CRUISE_SPEED * 1.2
+          : CRUISE_SPEED;
     // Arcade speed servo acts through impulses; all vertical contact is raycast suspension.
     const acceleration = clamp((target - v.x) * (biomeIndex(p.x) === 1 ? 1.7 : 3.5), -20, 20);
     this.body.applyImpulse({ x: acceleration * this.body.mass() * dt, y: 0, z: 0 }, true);
     if (this.jumpAssist.update(input.jump, grounded, dt)) {
       this.launched = true;
       this.patrolJump.launch(p.x);
-      this.body.applyImpulse({ x: 0, y: this.body.mass() * 11.5, z: 0 }, true);
+      this.body.applyImpulse({ x: 0, y: this.body.mass() * jumpSpeed(gravity), z: 0 }, true);
       this.audio.jump();
       this.burst(p.x, p.y - 1, 24);
       this.lastGrounded = false;
     }
     this.jumpHeld = input.jump ? this.jumpHeld + dt : 0;
     if (hovering && v.y < 2.5)
-      this.body.applyImpulse({ x: 0, y: this.body.mass() * gravity * 0.86 * dt, z: 0 }, true);
+      this.body.applyImpulse(
+        { x: 0, y: this.body.mass() * effectiveGravity * 0.86 * dt, z: 0 },
+        true,
+      );
     const angle = 2 * Math.atan2(this.body.rotation().z, this.body.rotation().w),
       desired = grounded ? slope : input.pitch * 0.349;
     this.body.setAngvel({ x: 0, y: 0, z: clamp((desired - angle) * 6, -1.5, 1.5) }, true);
-    this.world.gravity.y = -gravity;
+    this.world.gravity.y = -effectiveGravity;
     this.vehicle.updateVehicle(dt);
     this.world.step();
     this.current.copy(this.body.translation());
@@ -874,7 +893,7 @@ export class Game {
         this.airborneTime = 0;
         this.jumpAssist.reset();
         this.body.setTranslation({ x, y: this.terrain.heightAt(x) + 3, z: 0 }, true);
-        this.body.setLinvel({ x: 18, y: 0, z: 0 }, true);
+        this.body.setLinvel({ x: CRUISE_SPEED, y: 0, z: 0 }, true);
         this.current.copy(this.body.translation());
         this.previous.copy(this.current);
         this.invulnerable = 2;
@@ -900,6 +919,7 @@ export class Game {
       for (const e of this.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < 4) e.hp -= dt * 5;
       if (Math.random() < 0.3) this.burst(p.x, p.y, 2);
     }
+    this.updateSteam(dt, input.vent && s.heat > 5);
     if (boosting && Math.random() < 0.65) this.burst(p.x - 2, p.y - 0.2, 2);
     this.updateEnemies(dt, boosting);
     this.updateShots(dt);
@@ -1021,7 +1041,7 @@ export class Game {
       { x, y } = this.groundMuzzle(p.x, p.y);
     this.beamTime += dt;
     if (
-      !addHeat(this.state, (28 + Math.min(1.5, this.beamTime) * 20) * dt) ||
+      !addHeat(this.state, (21 + Math.min(1.5, this.beamTime) * 15) * dt) ||
       this.state.lockout > 0
     )
       return;
@@ -1075,7 +1095,7 @@ export class Game {
       { x, y, angle } = this.railAim(p.x, p.y);
     const dx = Math.cos(angle),
       dy = Math.sin(angle);
-    if (!addHeat(this.state, 10 + strength * 10)) return;
+    if (!addHeat(this.state, 7.5 + strength * 7.5)) return;
     let length = surfaceRayDistance(x, y, dx, dy, RAIL_RANGE, (x) =>
       this.hazards.surfaceHeight(x, this.terrain.heightAt(x)),
     );
@@ -1117,7 +1137,7 @@ export class Game {
     }
     if (this.loadout.ground !== 'beam' && firing && this.fireCooldown <= 0) {
       const w = this.loadout.ground,
-        heat = w === 'pulse' ? 7 : 20;
+        heat = w === 'pulse' ? 5.3 : 15;
       if (addHeat(s, heat)) {
         const damage = w === 'pulse' ? 1 : 5;
         this.shoot(
@@ -1136,21 +1156,22 @@ export class Game {
     if (this.loadout.sky === 'rail') {
       const before = this.railCharge.charge;
       const strength = this.railCharge.update(input.fire, input.vent || s.lockout > 0, dt);
-      if (input.fire && this.railCharge.charge > before) addHeat(s, 6 * dt);
+      if (input.fire && this.railCharge.charge > before) addHeat(s, 4.5 * dt);
       if (s.lockout > 0) this.railCharge.cancel();
       else if (strength) this.dischargeRail(strength);
     } else this.railCharge.cancel();
     if (firing && this.loadout.sky !== 'rail' && this.skyCooldown <= 0 && s.lockout <= 0) {
       const w = this.loadout.sky;
       const angle = this.firingAngle(p.x - 0.6, p.y + 2.3);
-      if (addHeat(s, w === 'seeker' ? 12 : 6)) {
+      if (addHeat(s, w === 'seeker' ? 9 : 4.5)) {
         for (let i = 0; i < (w === 'seeker' ? 2 : 1); i++)
           this.shoot(
             w,
             p.x - 0.6,
             p.y + 2.3,
-            Math.cos(angle + (i - 0.5) * (w === 'seeker' ? 0.07 : 0)) * 40 + this.body.linvel().x,
-            Math.sin(angle) * 40,
+            Math.cos(angle + (i - 0.5) * (w === 'seeker' ? 0.07 : 0)) * SKY_SHOT_SPEED +
+              this.body.linvel().x,
+            Math.sin(angle) * SKY_SHOT_SPEED,
             2,
             false,
           );
@@ -1184,7 +1205,7 @@ export class Game {
       vx,
       vy,
       damage,
-      life: enemy ? 5 : type === 'flak' ? 0.62 : 2,
+      life: enemy ? 5 : type === 'flak' ? 0.42 : 2,
       impactX: undefined,
     });
     shot.mesh.visible = true;
@@ -1248,8 +1269,8 @@ export class Game {
         }
         if (target) {
           const a = Math.atan2(target.y - s.y, target.x - s.x);
-          s.vx += (Math.cos(a) * 45 + this.state.speed - s.vx) * dt * 5;
-          s.vy += (Math.sin(a) * 45 - s.vy) * dt * 5;
+          s.vx += (Math.cos(a) * SEEKER_HOMING_SPEED + this.state.speed - s.vx) * dt * 5;
+          s.vy += (Math.sin(a) * SEEKER_HOMING_SPEED - s.vy) * dt * 5;
         }
       }
       if (s.enemy) s.vy -= dt * BOMB_GRAVITY;
@@ -1479,7 +1500,8 @@ export class Game {
       }
       if (e.kind === 'mine') {
         e.y = this.terrain.heightAt(e.x) + 1.3 + Math.sin(this.elapsed * 3) * 0.3;
-        if (Math.abs(e.x - p.x) < 20 && this.state.speed < 13) e.x += Math.sign(p.x - e.x) * dt * 5;
+        if (Math.abs(e.x - p.x) < 20 && this.state.speed < CRUISE_SPEED * 0.65)
+          e.x += Math.sign(p.x - e.x) * dt * 5;
       }
       if (e.kind === 'leech') {
         e.y = -2 + Math.max(0, 1 - Math.abs(e.x - p.x) / 12) * 8;
@@ -1629,6 +1651,24 @@ export class Game {
         vz: (Math.random() - 0.5) * 7,
         life: 0.5 + Math.random() * 0.8,
         max: 1,
+        steam: false,
+      });
+      if (--count <= 0) break;
+    }
+  }
+  private steam(x: number, y: number, count: number) {
+    for (const p of this.particles) {
+      if (p.life > 0) continue;
+      Object.assign(p, {
+        x: x + (Math.random() - 0.5) * 1.6,
+        y,
+        z: (Math.random() - 0.5) * 1.2,
+        vx: -3 + (Math.random() - 0.5) * 3,
+        vy: 2.5 + Math.random() * 2.5,
+        vz: (Math.random() - 0.5) * 1.5,
+        life: 0.7 + Math.random() * 0.5,
+        max: 1,
+        steam: true,
       });
       if (--count <= 0) break;
     }
@@ -1640,12 +1680,26 @@ export class Game {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;
-        p.vy -= 10 * dt;
-        if (p.y < this.terrain.heightAt(p.x)) {
+        p.vy -= (p.steam ? 0 : 10) * dt;
+        if (!p.steam && p.y < this.terrain.heightAt(p.x)) {
           p.y = this.terrain.heightAt(p.x) + 0.1;
           p.vy = Math.abs(p.vy) * 0.35;
         }
       }
+  }
+  private updateSteam(dt: number, venting: boolean) {
+    const s = this.state,
+      p = this.current;
+    const locked = s.lockout > 0;
+    // Throttled so a fixed-step catch-up never floods the shared particle pool.
+    this.steamTimer -= dt;
+    if ((venting || (locked && !this.wasLocked)) && this.steamTimer <= 0) {
+      const lite = s.quality === 'performance';
+      this.steam(p.x - 0.8, p.y + 0.9, lite ? 1 : venting ? 2 : 4);
+      this.steamTimer = lite ? 0.09 : 0.045;
+    }
+    if (this.wasLocked && !locked) this.steam(p.x - 0.8, p.y + 0.9, 8);
+    this.wasLocked = locked;
   }
   private render(dt: number, input: Input) {
     const menu = this.state.phase === 'menu',
@@ -1843,7 +1897,9 @@ export class Game {
     for (const q of this.particles) {
       if (q.life <= 0) continue;
       this.dummy.position.set(q.x, q.y, q.z);
-      this.dummy.scale.setScalar(q.life > 0 ? Math.min(1, q.life * 3) : 0);
+      this.dummy.scale.setScalar(
+        q.steam ? Math.min(1, q.life * 3) * (1 + (1.2 - q.life) * 1.8) : Math.min(1, q.life * 3),
+      );
       this.dummy.rotation.set(q.life * 4, q.life * 2, 0);
       this.dummy.updateMatrix();
       this.particleMesh.setMatrixAt(particleCount++, this.dummy.matrix);

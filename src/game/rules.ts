@@ -57,6 +57,29 @@ export const BIOMES = [
     description: 'One last transmission. One way through.',
   },
 ] as const;
+/** Rover speed servo targets in m/s. Boost is the old cruise speed. */
+export const CRUISE_SPEED = 15;
+export const BOOST_SPEED = 20;
+export const SKY_SHOT_SPEED = 62;
+export const SEEKER_HOMING_SPEED = 65;
+export const VENT_RATE = 100;
+/** Par for a checkpoint leg at cruise speed; boosting beats it. */
+export const CHECKPOINT_PAR_TIME = 85;
+/** Zones with this gravity keep the original floaty jump. */
+export const LOW_GRAVITY = 3;
+const JUMP_HEIGHT = 5;
+const ASCENT_GRAVITY = 1.1;
+const DESCENT_GRAVITY = 1.35;
+/** Gravity actually applied: a little heavier going up, snappier coming down. */
+export function effectiveGravityAt(gravity: number, verticalSpeed: number) {
+  return gravity === LOW_GRAVITY
+    ? gravity
+    : gravity * (verticalSpeed < 0 ? DESCENT_GRAVITY : ASCENT_GRAVITY);
+}
+/** Launch speed giving a constant apex height whatever the biome gravity. */
+export function jumpSpeed(gravity: number) {
+  return gravity === LOW_GRAVITY ? 11.5 : Math.sqrt(2 * gravity * ASCENT_GRAVITY * JUMP_HEIGHT);
+}
 export const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 export const biomeIndex = (x: number) => clamp(Math.floor(x / (SECTOR_LENGTH * 5)), 0, 4);
 export const sectorIndex = (x: number) => clamp(Math.floor(x / SECTOR_LENGTH), 0, 25);
@@ -173,7 +196,10 @@ export function updateEnergy(s: Telemetry, input: Input, airborne: boolean, dt: 
     100,
   );
   s.lockout = Math.max(0, s.lockout - dt);
-  s.heat = Math.max(0, s.heat - dt * (input.vent ? 55 : input.fire && s.lockout === 0 ? 4 : 24));
+  s.heat = Math.max(
+    0,
+    s.heat - dt * (input.vent ? VENT_RATE : input.fire && s.lockout === 0 ? 4 : 24),
+  );
   return { boosting, hovering };
 }
 export function addHeat(s: Telemetry, value: number) {
@@ -184,7 +210,7 @@ export function addHeat(s: Telemetry, value: number) {
 }
 export function checkpointBonus(time: number, kills: number, clean: number, damage: number) {
   return (
-    Math.max(0, Math.round((65 - time) * 80)) +
+    Math.max(0, Math.round((CHECKPOINT_PAR_TIME - time) * 80)) +
     kills * 150 +
     clean * 250 +
     (damage === 0 ? 1500 : 0)

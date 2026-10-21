@@ -43,7 +43,7 @@ try {
           { x: takeoff - 9, y: g.terrain.heightAt(takeoff - 9) + 1.5, z: 0 },
           true,
         );
-        g.body.setLinvel({ x: 20, y: 0, z: 0 }, true);
+        g.body.setLinvel({ x: 15, y: 0, z: 0 }, true);
         g.current.copy(g.body.translation());
         g.previous.copy(g.current);
         if (target === 'rock') g.spawn('rock', 75, g.terrain.heightAt(75) + 1);
