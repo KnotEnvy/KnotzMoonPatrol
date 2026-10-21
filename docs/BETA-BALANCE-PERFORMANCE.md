@@ -124,3 +124,33 @@ The October 15 420-second as-is capture completed both routes but failed the gat
 PR #4 also merged 256 m regional batching for static scenery and prepared/disabled route colliders. This October 17 integration preserves that batching and collider reuse while replacing its repeated primitive scenery with the Blender-authored environment kit and its terrain triangle collider with the grid-matched heightfield. The remote capture reduced geometry resources from 803 to 452 and fixed-fixture draws from 51/35 to 45/31 (WebGPU/WebGL); the heightfield collider fixture separately measured roughly 35× lower median CPU construction/removal cost than the previous triangle path. Those workload reductions do not establish a full-route frame-rate pass.
 
 On October 15 the user authorized merging this continuation to `main`; the repository's existing Pages workflow validates and deploys that branch. The merge preserves the recorded frame gate and its failure evidence for follow-up work.
+
+## Playtest feel pass (speed, gravity, heat, sky turret)
+
+| Setting                       | Old                          | New                                                               |
+| ----------------------------- | ---------------------------- | ----------------------------------------------------------------- |
+| Cruise speed                  | 20                           | 15                                                                |
+| Boost speed                   | 36                           | 20 (old cruise)                                                   |
+| Brake speed                   | 8                            | 6 (0.4 x cruise)                                                  |
+| Post-clean-landing boost      | 24                           | 18 (1.2 x cruise)                                                 |
+| Mine chase threshold          | speed < 13                   | speed < 9.75                                                      |
+| Checkpoint par time           | 65 s                         | 85 s                                                              |
+| Gravity going up / down       | 1.0x / 1.0x                  | 1.1x / 1.35x (low-gravity zones unchanged at 3)                   |
+| Jump launch speed             | 11.5 flat                    | sqrt(2 g 1.1 x 5), about 13.7 at g17; low-gravity zones stay 11.5 |
+| Clean landing max fall speed  | 17                           | 19                                                                |
+| Pulse / seismic heat per shot | 7 / 20                       | 5.3 / 15                                                          |
+| Flak / seeker heat per shot   | 6 / 12                       | 4.5 / 9                                                           |
+| Beam heat per second          | 28 + up to 30                | 21 + up to 22.5                                                   |
+| Rail charge / discharge heat  | 6 per s / 10 + 10 x strength | 4.5 per s / 7.5 + 7.5 x strength                                  |
+| Vent cooling per second       | 55                           | 100                                                               |
+| Sky shot speed (flak, seeker) | 40                           | 62                                                                |
+| Flak lifetime                 | 0.62 s                       | 0.42 s (about the same range)                                     |
+| Seeker homing speed           | 45                           | 65                                                                |
+
+Venting now emits grey steam puffs from the rover (shared particle pool, fewer puffs on
+Performance quality), with a larger puff when overheat lockout starts and ends.
+
+Gap clearance: jump height is held at about 5 m in every biome. Airborne distance at cruise
+over the 12 m authored crater is 20.9 / 20.3 / 18.3 / 21.5 / 24.8 m for biomes 1 to 5
+(1.5x to 2.1x the gap, previously 1.7x to 3.2x). `tests/rules.test.ts` enforces at least 1.45x.
+Browser runs jumping craters in biomes 1, 2, 3, 4 and 5 at 4, 2 and 0.5 m before the lip all cleared.
