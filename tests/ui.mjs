@@ -40,12 +40,15 @@ try {
           ),
         };
       };
+      const visible = (n) => n && getComputedStyle(n).display !== 'none';
       return {
         menu: [...document.querySelectorAll('.title-menu button')].map(box),
-        dock:
-          getComputedStyle(document.querySelector('.loadout-dock')).display === 'none'
-            ? null
-            : box(document.querySelector('.loadout-dock')),
+        // Title furniture that must never cover a menu option.
+        furniture: [
+          ...document.querySelectorAll('.title-record, .title-footer, .game-title, .game-tools'),
+        ]
+          .filter(visible)
+          .map(box),
         title: box(document.querySelector('h1')),
         canvas: box(document.querySelector('canvas')),
         scroll: document.documentElement.scrollWidth,
@@ -55,12 +58,13 @@ try {
     assert.equal(title.canvas.width, width);
     assert.equal(title.canvas.height, height);
     assert(title.title.x >= 0 && title.title.right <= width, 'Title wordmark clipped');
+    assert.equal(title.menu.length, 4);
     for (const b of title.menu) {
       assert(b.height >= 42 && b.y >= 0 && b.bottom <= height, 'Menu inaccessible');
-      if (title.dock)
+      for (const item of title.furniture)
         assert(
-          !intersects(b, title.dock),
-          'Loadout covers main menu: ' + JSON.stringify({ width, height, b, dock: title.dock }),
+          !intersects(b, item),
+          'Title furniture covers main menu: ' + JSON.stringify({ width, height, b, item }),
         );
     }
     await page.screenshot({ path: `test-results/ui-title-${width}.png` });
@@ -77,6 +81,15 @@ try {
   assert.equal(await page.evaluate(() => window.__voidRunner.state.phase), 'menu');
   await page.keyboard.press('Escape');
   await page.getByRole('dialog').waitFor({ state: 'detached' });
+  // Focus returns to the opener; WASD mirrors the arrows and the cursor follows focus.
+  await expect(page.getByRole('button', { name: 'Flight manual', exact: true })).toBeFocused();
+  await page.keyboard.press('KeyW');
+  await expect(page.getByRole('button', { name: 'Graphics settings', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Graphics settings', exact: true })).toHaveClass(
+    /is-selected/,
+  );
+  await page.keyboard.press('KeyS');
+  await expect(page.getByRole('button', { name: 'Flight manual', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'CONFIGURE ROVER', exact: true }).click();
   await page.getByRole('button', { name: /Resonance Beam/ }).click();
   await page.getByRole('button', { name: /Tachyon Railgun/ }).click();

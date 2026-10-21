@@ -49,10 +49,10 @@ Performance, Balanced (default) and Cinematic, selectable from the title screen 
 
 ## Changes in this release
 
-- Rover cruise speed is lower; boost now tops out at the old cruise speed.
+- Rover cruise speed is lower (15 instead of 20); boost now tops out at the old cruise speed.
 - Stronger jump gravity, so the rover falls faster. Low-gravity zones stay floaty.
 - Weapon heat builds more slowly, and venting is faster and releases a visible puff of steam.
-- Top turret (sky weapon) shots travel faster.
+- Top turret (sky weapon) shots travel about 55% faster.
 - Redesigned classic arcade-style title screen, and a unified visual style across the HUD, pause menu, hangar, reports and end screens.
 - Better link previews when sharing the game (Open Graph/Twitter cards, structured data), a web manifest, and beta feedback issue templates.
 
@@ -63,14 +63,13 @@ Performance, Balanced (default) and Cinematic, selectable from the title screen 
 
 ## Known issues
 
-- This is a beta, not a full match for the project's requirements document; see [implementation status](IMPLEMENTATION-STATUS.md) for what is simplified or missing.
-- A stable 60 FPS is **not** guaranteed. Frame-time spikes were measured on long runs, especially on lower-end GPUs and at 1080p; see [performance measurements](PERFORMANCE.md).
+- This is a beta, not a full match for the project's requirements document; see [implementation status](https://github.com/KnotEnvy/KnotzMoonPatrol/blob/main/docs/IMPLEMENTATION-STATUS.md) for what is simplified or missing.
+- A stable 60 FPS is **not** guaranteed. Frame-time spikes were measured on long runs, especially on lower-end GPUs and at 1080p; see [performance measurements](https://github.com/KnotEnvy/KnotzMoonPatrol/blob/main/docs/PERFORMANCE.md).
 - WebGL 2 has no dynamic shadows or cinematic effects.
 - Difficulty and weapon balance have not had broad human testing. Some loadout pairs are likely harder than others (Beam and Rail are more demanding near late laser emitters and aerial threats). This is the main thing we want feedback on.
 - Gamepad mappings, vibration, touch controls and mobile devices have not been validated on physical hardware.
 - Cross-platform deterministic replay is not supported.
 - The visual debris system is a bounded 800-instance pool, not a large GPU particle system.
-- No license has been chosen for the source code yet.
 
 ## How to give feedback
 
